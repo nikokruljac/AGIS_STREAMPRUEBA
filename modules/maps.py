@@ -157,10 +157,10 @@ def _add_continuous_legend(fig, ax, cmap, vmin, vmax, label, unit=""):
     scalar.set_array([])
     cbar = fig.colorbar(
         scalar, ax=ax, orientation="horizontal",
-        fraction=0.045, pad=0.075, aspect=35
+        fraction=0.028, pad=0.045, aspect=48
     )
-    cbar.set_label(label + (f" ({unit})" if unit else ""), fontsize=8)
-    cbar.ax.tick_params(labelsize=7, length=2)
+    cbar.set_label(label + (f" ({unit})" if unit else ""), fontsize=6.5)
+    cbar.ax.tick_params(labelsize=6, length=1.5)
     cbar.outline.set_linewidth(0.5)
 
 
@@ -355,8 +355,33 @@ def raster_map(
 
     fig, ax = plt.subplots(figsize=(9, 7))
 
-    ax.set_xlim(bounds.left, bounds.right)
-    ax.set_ylim(bounds.bottom, bounds.top)
+    # Encuadre cartográfico: prioriza la distribución real de los lotes
+    # y evita mostrar superficie raster periférica que no aporta información.
+    # No altera ni acerca artificialmente los lotes entre sí.
+    if gdf is not None and not gdf.empty:
+        lots_extent = gdf
+        if "tipo_geometria" in lots_extent.columns:
+            lots_extent = lots_extent[
+                lots_extent["tipo_geometria"].astype(str) == "LOTE"
+            ]
+        if not lots_extent.empty:
+            lots_extent = (
+                lots_extent.to_crs(crs)
+                if lots_extent.crs != crs else lots_extent
+            )
+            minx, miny, maxx, maxy = lots_extent.total_bounds
+            dx = maxx - minx
+            dy = maxy - miny
+            padx = max(dx * 0.035, abs(bounds.right - bounds.left) * 0.002)
+            pady = max(dy * 0.035, abs(bounds.top - bounds.bottom) * 0.002)
+            ax.set_xlim(minx - padx, maxx + padx)
+            ax.set_ylim(miny - pady, maxy + pady)
+        else:
+            ax.set_xlim(bounds.left, bounds.right)
+            ax.set_ylim(bounds.bottom, bounds.top)
+    else:
+        ax.set_xlim(bounds.left, bounds.right)
+        ax.set_ylim(bounds.bottom, bounds.top)
 
     _add_satellite_with_retry(ax, crs)
 
@@ -941,7 +966,7 @@ def radar_record_map(raster, gdf, record_id):
     ax.set_xlim(minx - margin_x, maxx + margin_x)
     ax.set_ylim(miny - margin_y, maxy + margin_y)
 
-    _add_satellite(ax, crs)
+    _add_satellite_with_retry(ax, crs)
 
     ax.imshow(
         np.ma.masked_invalid(sar),
