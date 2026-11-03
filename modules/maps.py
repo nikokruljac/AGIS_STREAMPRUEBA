@@ -148,19 +148,26 @@ def _visual_limits(data):
 
 
 def _add_continuous_legend(fig, ax, cmap, vmin, vmax, label, unit=""):
-    """Agrega una escala continua explícita sin crear clases agronómicas."""
+    """Agrega leyendas independientes en bandas reservadas, sin superposición."""
     if vmin is None or vmax is None:
         return
     import matplotlib as mpl
     norm = mpl.colors.Normalize(vmin=float(vmin), vmax=float(vmax))
     scalar = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
     scalar.set_array([])
-    cbar = fig.colorbar(
-        scalar, ax=ax, orientation="horizontal",
-        fraction=0.028, pad=0.045, aspect=48
-    )
-    cbar.set_label(label + (f" ({unit})" if unit else ""), fontsize=6.5)
-    cbar.ax.tick_params(labelsize=6, length=1.5)
+
+    # Las dos escalas se dibujan en ejes propios. El rótulo va arriba
+    # de cada barra y los valores abajo, evitando que NDRE y SAR se pisen.
+    label_upper = str(label).strip().upper()
+    if label_upper.startswith("NDRE"):
+        cax = fig.add_axes([0.12, 0.175, 0.76, 0.022])
+    else:  # SAR VV
+        cax = fig.add_axes([0.12, 0.075, 0.76, 0.022])
+
+    cbar = fig.colorbar(scalar, cax=cax, orientation="horizontal")
+    cbar.set_label(label + (f" ({unit})" if unit else ""), fontsize=6.5, labelpad=2)
+    cbar.ax.xaxis.set_label_position("top")
+    cbar.ax.tick_params(labelsize=6, length=1.5, pad=1)
     cbar.outline.set_linewidth(0.5)
 
 
@@ -400,7 +407,7 @@ def raster_map(
     gdf=None,
     title=""
 ):
-    """Mapa de estado general con paneles por sector geográfico real."""
+    """Mapa de estado general con sectores ordenados en un bloque compacto."""
     data = raster["data"][band - 1]
     bounds = raster["bounds"]
     crs = raster["crs"]
@@ -415,16 +422,36 @@ def raster_map(
     sectors = _spatial_lot_sectors(gdf) if gdf is not None and not gdf.empty else []
     if not sectors:
         sectors = [None]
-    ncols = 2 if len(sectors) > 1 else 1
-    nrows = int(np.ceil(len(sectors) / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(10, 6.5), squeeze=False)
-    axes_flat = list(axes.ravel())
+
+    # Orden de lectura: izquierda a derecha y de arriba hacia abajo.
+    # Con tres sectores, el tercero queda centrado debajo de los dos primeros.
+    n = len(sectors)
+    fig = plt.figure(figsize=(12, 7.2))
+    if n == 1:
+        grid = fig.add_gridspec(1, 1, left=0.025, right=0.975,
+                                top=0.94, bottom=0.18)
+        axes_list = [fig.add_subplot(grid[0, 0])]
+    elif n == 2:
+        grid = fig.add_gridspec(1, 2, left=0.025, right=0.975,
+                                top=0.94, bottom=0.18, wspace=0.035)
+        axes_list = [fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[0, 1])]
+    else:
+        grid = fig.add_gridspec(2, 4, left=0.025, right=0.975,
+                                top=0.94, bottom=0.18,
+                                wspace=0.035, hspace=0.07)
+        if n == 3:
+            positions = [(0, slice(0, 2)), (0, slice(2, 4)),
+                         (1, slice(1, 3))]
+        else:
+            positions = [(0, slice(0, 2)), (0, slice(2, 4)),
+                         (1, slice(0, 2)), (1, slice(2, 4))]
+        axes_list = []
+        for idx in range(n):
+            row, cols = positions[idx]
+            axes_list.append(fig.add_subplot(grid[row, cols]))
 
     masked = np.ma.masked_where((~np.isfinite(data)) | (data <= -9998), data)
-    for idx, ax in enumerate(axes_flat):
-        if idx >= len(sectors):
-            ax.set_axis_off()
-            continue
+    for idx, ax in enumerate(axes_list):
         sector = sectors[idx]
         if sector is None:
             minx, miny, maxx, maxy = bounds.left, bounds.bottom, bounds.right, bounds.top
@@ -433,8 +460,8 @@ def raster_map(
             sector_plot = sector.to_crs(crs) if sector.crs != crs else sector.copy()
             minx, miny, maxx, maxy = sector_plot.total_bounds
         dx, dy = maxx - minx, maxy - miny
-        padx = max(dx * 0.10, abs(bounds.right - bounds.left) * 0.001)
-        pady = max(dy * 0.10, abs(bounds.top - bounds.bottom) * 0.001)
+        padx = max(dx * 0.08, abs(bounds.right - bounds.left) * 0.001)
+        pady = max(dy * 0.08, abs(bounds.top - bounds.bottom) * 0.001)
         ax.set_xlim(minx - padx, maxx + padx)
         ax.set_ylim(miny - pady, maxy + pady)
         _add_satellite_with_retry(ax, crs)
@@ -442,25 +469,24 @@ def raster_map(
                   extent=[bounds.left, bounds.right, bounds.bottom, bounds.top],
                   origin="upper", vmin=vmin, vmax=vmax, alpha=0.68)
         if sector_plot is not None and not sector_plot.empty:
-            sector_plot.boundary.plot(ax=ax, color="white", linewidth=0.75, alpha=0.95)
+            sector_plot.boundary.plot(ax=ax, color="white", linewidth=0.85, alpha=0.98)
         ax.set_axis_off()
-        ax.set_title(f"SECTOR {idx + 1}" if len(sectors) > 1 else "",
-                     loc="left", fontsize=9, fontweight="bold", color=CHARCOAL, pad=3)
+        ax.set_title(f"SECTOR {idx + 1}" if n > 1 else "",
+                     loc="left", fontsize=9, fontweight="bold", color=CHARCOAL, pad=2)
 
     if vmin is not None and vmax is not None:
         import matplotlib as mpl
         norm = mpl.colors.Normalize(vmin=float(vmin), vmax=float(vmax))
         scalar = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
         scalar.set_array([])
-        cbar = fig.colorbar(scalar, ax=axes_flat[:len(sectors)], orientation="horizontal",
-                            fraction=0.035, pad=0.045, aspect=55)
+        cax = fig.add_axes([0.22, 0.095, 0.56, 0.022])
+        cbar = fig.colorbar(scalar, cax=cax, orientation="horizontal")
         legend_name = "NDMI · menor a mayor valor" if band == 3 else "NDRE · menor a mayor valor"
-        cbar.set_label(legend_name, fontsize=6.5)
-        cbar.ax.tick_params(labelsize=6, length=1.5)
+        cbar.set_label(legend_name, fontsize=6.5, labelpad=2)
+        cbar.ax.tick_params(labelsize=6, length=1.5, pad=1)
         cbar.outline.set_linewidth(0.5)
     if title:
         fig.suptitle(title, x=0.03, ha="left", fontsize=11, fontweight="bold", color=CHARCOAL)
-    fig.subplots_adjust(left=0.025, right=0.975, top=0.96, bottom=0.12, wspace=0.04, hspace=0.12)
     return _save(fig)
 
 
@@ -875,7 +901,7 @@ def record_map(raster, gdf, record_id):
         _add_continuous_legend(fig, ax, INDEX_CMAP, ndre_vmin, ndre_vmax, "NDRE", "índice")
 
     ax.set_axis_off()
-    fig.subplots_adjust(bottom=0.22, top=0.98, left=0.03, right=0.97)
+    fig.subplots_adjust(bottom=0.29, top=0.98, left=0.03, right=0.97)
     return _save(fig)
 
 # ---------------------------------------------------------
@@ -1015,3 +1041,4 @@ def radar_record_map(raster, gdf, record_id):
 
     ax.set_axis_off()
     return _save(fig)
+
