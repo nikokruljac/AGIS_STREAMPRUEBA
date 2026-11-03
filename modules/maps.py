@@ -147,6 +147,42 @@ def _visual_limits(data):
     return vmin, vmax
 
 
+def _add_continuous_legend(fig, ax, cmap, vmin, vmax, label, unit=""):
+    """Agrega una escala continua explícita sin crear clases agronómicas."""
+    if vmin is None or vmax is None:
+        return
+    import matplotlib as mpl
+    norm = mpl.colors.Normalize(vmin=float(vmin), vmax=float(vmax))
+    scalar = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+    scalar.set_array([])
+    cbar = fig.colorbar(
+        scalar, ax=ax, orientation="horizontal",
+        fraction=0.045, pad=0.075, aspect=35
+    )
+    cbar.set_label(label + (f" ({unit})" if unit else ""), fontsize=8)
+    cbar.ax.tick_params(labelsize=7, length=2)
+    cbar.outline.set_linewidth(0.5)
+
+
+def _add_satellite_with_retry(ax, crs):
+    """Intenta Esri World Imagery en zooms progresivamente menores.
+
+    Si el servicio no responde, deja un fondo neutro limpio; nunca
+    conserva mosaicos de error ni agrega textos de atribución sobre el mapa.
+    """
+    for adjust in (-1, -2, -3):
+        try:
+            ctx.add_basemap(
+                ax, source=ctx.providers.Esri.WorldImagery,
+                crs=crs, attribution=False, zoom_adjust=adjust
+            )
+            return True
+        except Exception:
+            continue
+    ax.set_facecolor("#E8E8E5")
+    return False
+
+
 # ---------------------------------------------------------
 # MAPA BASE SATELITAL
 # ---------------------------------------------------------
@@ -223,7 +259,7 @@ def general_priority_map(gdf):
         maxy + margin_y
     )
 
-    _add_satellite(
+    _add_satellite_with_retry(
         ax,
         v.crs
     )
@@ -262,7 +298,7 @@ def general_priority_map(gdf):
     ax.set_title(
         "Dónde prestar atención",
         loc="left",
-        fontsize=16,
+        fontsize=12,
         fontweight="bold",
         color=CHARCOAL
     )
@@ -322,7 +358,7 @@ def raster_map(
     ax.set_xlim(bounds.left, bounds.right)
     ax.set_ylim(bounds.bottom, bounds.top)
 
-    _add_satellite(ax, crs)
+    _add_satellite_with_retry(ax, crs)
 
     masked = np.ma.masked_where(
         (~np.isfinite(data)) | (data <= -9998),
@@ -367,14 +403,12 @@ def raster_map(
             )
 
     ax.set_axis_off()
-    ax.set_title(
-        title,
-        loc="left",
-        fontsize=15,
-        fontweight="bold",
-        color=CHARCOAL
-    )
-
+    if vmin is not None and vmax is not None:
+        legend_name = "NDMI · menor a mayor valor" if band == 3 else "NDRE · menor a mayor valor"
+        _add_continuous_legend(fig, ax, cmap, vmin, vmax, legend_name)
+    if title:
+        ax.set_title(title, loc="left", fontsize=12, fontweight="bold", color=CHARCOAL)
+    fig.subplots_adjust(bottom=0.13, top=0.96, left=0.03, right=0.97)
     return _save(fig)
 
 
@@ -692,19 +726,7 @@ def record_map(raster, gdf, record_id):
     # El cambio afecta únicamente a este mapa individual.
     # -----------------------------------------------------
 
-    try:
-        ctx.add_basemap(
-            ax,
-            source=ctx.providers.Esri.WorldImagery,
-            crs=crs,
-            attribution=False,
-            zoom_adjust=-1
-        )
-    except Exception:
-        # Se mantiene el comportamiento original:
-        # si el proveedor no puede cargar el fondo, el mapa
-        # continúa mostrando las capas AGIS disponibles.
-        pass
+    _add_satellite_with_retry(ax, crs)
 
     # -----------------------------------------------------
     # SAR BASE
@@ -793,8 +815,15 @@ def record_map(raster, gdf, record_id):
         maxy + margin_y
     )
 
-    ax.set_axis_off()
+    # Leyendas continuas de las dos capas realmente dibujadas.
+    # Los rangos son los límites visuales del recorte, no umbrales diagnósticos.
+    if sar_vmin is not None and sar_vmax is not None:
+        _add_continuous_legend(fig, ax, SAR_CMAP, sar_vmin, sar_vmax, "SAR VV", "dB")
+    if ndre_vmin is not None and ndre_vmax is not None:
+        _add_continuous_legend(fig, ax, INDEX_CMAP, ndre_vmin, ndre_vmax, "NDRE", "índice")
 
+    ax.set_axis_off()
+    fig.subplots_adjust(bottom=0.22, top=0.98, left=0.03, right=0.97)
     return _save(fig)
 
 # ---------------------------------------------------------
