@@ -991,8 +991,8 @@ def build_pdf(df, gdf, raster, logo_bytes):
             story.append(
                 Image(
                     ndre_img,
-                    width=145 * mm,
-                    height=110 * mm
+                    width=160 * mm,
+                    height=105 * mm
                 )
             )
             story.append(Spacer(1, 3 * mm))
@@ -1013,8 +1013,8 @@ def build_pdf(df, gdf, raster, logo_bytes):
             story.append(
                 Image(
                     ndmi_img,
-                    width=145 * mm,
-                    height=110 * mm
+                    width=160 * mm,
+                    height=105 * mm
                 )
             )
 
@@ -1804,3 +1804,4 @@ def build_pdf(df, gdf, raster, logo_bytes):
     out.seek(0)
 
     return out
+
