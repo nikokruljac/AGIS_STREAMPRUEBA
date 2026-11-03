@@ -1804,4 +1804,3 @@ def build_pdf(df, gdf, raster, logo_bytes):
     out.seek(0)
 
     return out
-
