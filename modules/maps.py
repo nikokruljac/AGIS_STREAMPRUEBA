@@ -164,23 +164,100 @@ def _add_continuous_legend(fig, ax, cmap, vmin, vmax, label, unit=""):
     cbar.outline.set_linewidth(0.5)
 
 
-def _add_satellite_with_retry(ax, crs):
-    """Intenta Esri World Imagery en zooms progresivamente menores.
+def _basemap_looks_like_error(ax, previous_count):
+    """Detecta mosaicos grises de error que algunos servidores devuelven sin excepción."""
+    artists = ax.images[previous_count:]
+    for artist in artists:
+        try:
+            arr = np.asarray(artist.get_array())
+            if arr.ndim != 3 or arr.shape[-1] < 3:
+                continue
+            sample = arr[::max(1, arr.shape[0] // 100), ::max(1, arr.shape[1] // 100), :3].astype(float)
+            if sample.max() > 1:
+                sample /= 255.0
+            mx = sample.max(axis=2)
+            mn = sample.min(axis=2)
+            saturation = np.mean((mx - mn) / np.maximum(mx, 1e-6))
+            luminance = float(np.mean(sample))
+            # Los tiles de error de Esri observados son casi uniformemente grises,
+            # con texto blanco superpuesto. Evita confundirlos con imagen satelital.
+            if saturation < 0.035 and 0.58 < luminance < 0.90:
+                artist.remove()
+                return True
+        except Exception:
+            continue
+    return False
 
-    Si el servicio no responde, deja un fondo neutro limpio; nunca
-    conserva mosaicos de error ni agrega textos de atribución sobre el mapa.
-    """
+
+def _add_satellite_with_retry(ax, crs):
+    """Carga Esri World Imagery y descarta también mosaicos de error sin excepción."""
     for adjust in (-1, -2, -3):
+        before = len(ax.images)
         try:
             ctx.add_basemap(
                 ax, source=ctx.providers.Esri.WorldImagery,
                 crs=crs, attribution=False, zoom_adjust=adjust
             )
+            if _basemap_looks_like_error(ax, before):
+                continue
             return True
         except Exception:
-            continue
+            # El proveedor puede dejar artistas parciales antes de fallar.
+            for artist in ax.images[before:]:
+                try:
+                    artist.remove()
+                except Exception:
+                    pass
     ax.set_facecolor("#E8E8E5")
     return False
+
+
+def _spatial_lot_sectors(gdf, max_sectors=4):
+    """Agrupa lotes cercanos en sectores sin alterar sus posiciones geográficas."""
+    lots = gdf.copy()
+    if "tipo_geometria" in lots.columns:
+        lots = lots[lots["tipo_geometria"].astype(str).str.upper() == "LOTE"].copy()
+    lots = lots[lots.geometry.notna() & ~lots.geometry.is_empty]
+    if lots.empty:
+        return []
+    projected = lots.to_crs(epsg=3857)
+    centroids = projected.geometry.centroid
+    xy = np.column_stack([centroids.x.to_numpy(), centroids.y.to_numpy()])
+    if len(xy) == 1:
+        return [lots]
+    distances = np.sqrt(((xy[:, None, :] - xy[None, :, :]) ** 2).sum(axis=2))
+    np.fill_diagonal(distances, np.inf)
+    nearest = np.min(distances, axis=1)
+    threshold = float(np.clip(np.median(nearest) * 2.5, 1200, 5000))
+
+    # Componentes conexas por proximidad.
+    labels = np.arange(len(xy))
+    def root(i):
+        while labels[i] != i:
+            labels[i] = labels[labels[i]]
+            i = labels[i]
+        return i
+    for i in range(len(xy)):
+        for j in range(i + 1, len(xy)):
+            if distances[i, j] <= threshold:
+                ri, rj = root(i), root(j)
+                if ri != rj:
+                    labels[rj] = ri
+    groups = {}
+    for i in range(len(xy)):
+        groups.setdefault(root(i), []).append(i)
+    clusters = [list(v) for v in groups.values()]
+
+    # Limita la cantidad de paneles fusionando siempre los sectores más cercanos.
+    while len(clusters) > max_sectors:
+        centers = [xy[idx].mean(axis=0) for idx in clusters]
+        pair = min(((np.linalg.norm(centers[i] - centers[j]), i, j)
+                    for i in range(len(centers)) for j in range(i + 1, len(centers))))
+        _, i, j = pair
+        clusters[i] = clusters[i] + clusters[j]
+        clusters.pop(j)
+    clusters.sort(key=lambda idx: (xy[idx].mean(axis=0)[1], xy[idx].mean(axis=0)[0]), reverse=True)
+    return [lots.iloc[idx].copy() for idx in clusters]
 
 
 # ---------------------------------------------------------
@@ -323,117 +400,67 @@ def raster_map(
     gdf=None,
     title=""
 ):
-    """Renderiza una banda individual del TIFF AGIS.
-
-    Contrato actual del TIFF:
-      Band 1 = SAR_VV
-      Band 2 = NDRE
-      Band 3 = NDMI
-
-    Para el estado general se utilizan Band 2 y Band 3 como evidencia
-    óptica visual, sin convertirlas directamente en diagnósticos.
-    """
-
-    # Vista directa de la banda; se evita convertir el raster completo
-    # a float64. La máscara NoData se aplica sin modificar el original.
+    """Mapa de estado general con paneles por sector geográfico real."""
     data = raster["data"][band - 1]
-
     bounds = raster["bounds"]
     crs = raster["crs"]
-
     max_size = 1800
     height, width = data.shape
-    factor = max(
-        1,
-        int(max(height, width) / max_size)
-    )
-
+    factor = max(1, int(max(height, width) / max_size))
     if factor > 1:
         data = data[::factor, ::factor]
-
     vmin, vmax = _visual_limits(data)
-
-    fig, ax = plt.subplots(figsize=(9, 7))
-
-    # Encuadre cartográfico: prioriza la distribución real de los lotes
-    # y evita mostrar superficie raster periférica que no aporta información.
-    # No altera ni acerca artificialmente los lotes entre sí.
-    if gdf is not None and not gdf.empty:
-        lots_extent = gdf
-        if "tipo_geometria" in lots_extent.columns:
-            lots_extent = lots_extent[
-                lots_extent["tipo_geometria"].astype(str) == "LOTE"
-            ]
-        if not lots_extent.empty:
-            lots_extent = (
-                lots_extent.to_crs(crs)
-                if lots_extent.crs != crs else lots_extent
-            )
-            minx, miny, maxx, maxy = lots_extent.total_bounds
-            dx = maxx - minx
-            dy = maxy - miny
-            padx = max(dx * 0.035, abs(bounds.right - bounds.left) * 0.002)
-            pady = max(dy * 0.035, abs(bounds.top - bounds.bottom) * 0.002)
-            ax.set_xlim(minx - padx, maxx + padx)
-            ax.set_ylim(miny - pady, maxy + pady)
-        else:
-            ax.set_xlim(bounds.left, bounds.right)
-            ax.set_ylim(bounds.bottom, bounds.top)
-    else:
-        ax.set_xlim(bounds.left, bounds.right)
-        ax.set_ylim(bounds.bottom, bounds.top)
-
-    _add_satellite_with_retry(ax, crs)
-
-    masked = np.ma.masked_where(
-        (~np.isfinite(data)) | (data <= -9998),
-        data
-    )
-
-    # Band 3 = NDMI según el contrato actual del TIFF.
-    # Se diferencia visualmente del NDRE (Band 2).
     cmap = NDMI_CMAP if band == 3 else INDEX_CMAP
 
-    ax.imshow(
-        masked,
-        cmap=cmap,
-        interpolation="nearest",
-        extent=[
-            bounds.left,
-            bounds.right,
-            bounds.bottom,
-            bounds.top
-        ],
-        origin="upper",
-        vmin=vmin,
-        vmax=vmax,
-        alpha=0.68
-    )
+    sectors = _spatial_lot_sectors(gdf) if gdf is not None and not gdf.empty else []
+    if not sectors:
+        sectors = [None]
+    ncols = 2 if len(sectors) > 1 else 1
+    nrows = int(np.ceil(len(sectors) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(10, 6.5), squeeze=False)
+    axes_flat = list(axes.ravel())
 
-    if gdf is not None and not gdf.empty:
-        if gdf.crs != crs:
-            v = gdf.to_crs(crs)
+    masked = np.ma.masked_where((~np.isfinite(data)) | (data <= -9998), data)
+    for idx, ax in enumerate(axes_flat):
+        if idx >= len(sectors):
+            ax.set_axis_off()
+            continue
+        sector = sectors[idx]
+        if sector is None:
+            minx, miny, maxx, maxy = bounds.left, bounds.bottom, bounds.right, bounds.top
+            sector_plot = None
         else:
-            v = gdf.copy()
+            sector_plot = sector.to_crs(crs) if sector.crs != crs else sector.copy()
+            minx, miny, maxx, maxy = sector_plot.total_bounds
+        dx, dy = maxx - minx, maxy - miny
+        padx = max(dx * 0.10, abs(bounds.right - bounds.left) * 0.001)
+        pady = max(dy * 0.10, abs(bounds.top - bounds.bottom) * 0.001)
+        ax.set_xlim(minx - padx, maxx + padx)
+        ax.set_ylim(miny - pady, maxy + pady)
+        _add_satellite_with_retry(ax, crs)
+        ax.imshow(masked, cmap=cmap, interpolation="nearest",
+                  extent=[bounds.left, bounds.right, bounds.bottom, bounds.top],
+                  origin="upper", vmin=vmin, vmax=vmax, alpha=0.68)
+        if sector_plot is not None and not sector_plot.empty:
+            sector_plot.boundary.plot(ax=ax, color="white", linewidth=0.75, alpha=0.95)
+        ax.set_axis_off()
+        ax.set_title(f"SECTOR {idx + 1}" if len(sectors) > 1 else "",
+                     loc="left", fontsize=9, fontweight="bold", color=CHARCOAL, pad=3)
 
-        if "tipo_geometria" in v.columns:
-            v = v[v["tipo_geometria"].astype(str) == "LOTE"]
-
-        if not v.empty:
-            v.boundary.plot(
-                ax=ax,
-                color="white",
-                linewidth=0.65,
-                alpha=0.92
-            )
-
-    ax.set_axis_off()
     if vmin is not None and vmax is not None:
+        import matplotlib as mpl
+        norm = mpl.colors.Normalize(vmin=float(vmin), vmax=float(vmax))
+        scalar = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+        scalar.set_array([])
+        cbar = fig.colorbar(scalar, ax=axes_flat[:len(sectors)], orientation="horizontal",
+                            fraction=0.035, pad=0.045, aspect=55)
         legend_name = "NDMI · menor a mayor valor" if band == 3 else "NDRE · menor a mayor valor"
-        _add_continuous_legend(fig, ax, cmap, vmin, vmax, legend_name)
+        cbar.set_label(legend_name, fontsize=6.5)
+        cbar.ax.tick_params(labelsize=6, length=1.5)
+        cbar.outline.set_linewidth(0.5)
     if title:
-        ax.set_title(title, loc="left", fontsize=12, fontweight="bold", color=CHARCOAL)
-    fig.subplots_adjust(bottom=0.13, top=0.96, left=0.03, right=0.97)
+        fig.suptitle(title, x=0.03, ha="left", fontsize=11, fontweight="bold", color=CHARCOAL)
+    fig.subplots_adjust(left=0.025, right=0.975, top=0.96, bottom=0.12, wspace=0.04, hspace=0.12)
     return _save(fig)
 
 
