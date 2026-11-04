@@ -423,8 +423,10 @@ def raster_map(
     if not sectors:
         sectors = [None]
 
-    # Orden de lectura: izquierda a derecha y de arriba hacia abajo.
-    # Con tres sectores, el tercero queda centrado debajo de los dos primeros.
+    # Composición modular según cantidad de sectores.
+    # 1: un panel completo; 2: dos paneles horizontales;
+    # 3: dos paneles apilados a la izquierda y uno alto a la derecha;
+    # 4: grilla 2 x 2. El orden sigue la secuencia espacial de sectors.
     n = len(sectors)
     fig = plt.figure(figsize=(12, 7.2))
     if n == 1:
@@ -436,19 +438,22 @@ def raster_map(
                                 top=0.94, bottom=0.18, wspace=0.035)
         axes_list = [fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[0, 1])]
     else:
-        grid = fig.add_gridspec(2, 4, left=0.025, right=0.975,
+        grid = fig.add_gridspec(2, 2, left=0.025, right=0.975,
                                 top=0.94, bottom=0.18,
-                                wspace=0.035, hspace=0.07)
+                                wspace=0.035, hspace=0.055)
         if n == 3:
-            positions = [(0, slice(0, 2)), (0, slice(2, 4)),
-                         (1, slice(1, 3))]
+            # Orden de lectura: superior izquierdo, inferior izquierdo,
+            # y panel vertical derecho (composición solicitada).
+            positions = [(0, 0), (1, 0), (slice(0, 2), 1)]
         else:
-            positions = [(0, slice(0, 2)), (0, slice(2, 4)),
-                         (1, slice(0, 2)), (1, slice(2, 4))]
+            positions = [(0, 0), (0, 1), (1, 0), (1, 1)]
         axes_list = []
         for idx in range(n):
-            row, cols = positions[idx]
-            axes_list.append(fig.add_subplot(grid[row, cols]))
+            row, col = positions[idx]
+            if isinstance(row, slice):
+                axes_list.append(fig.add_subplot(grid[row, col]))
+            else:
+                axes_list.append(fig.add_subplot(grid[row, col]))
 
     masked = np.ma.masked_where((~np.isfinite(data)) | (data <= -9998), data)
     for idx, ax in enumerate(axes_list):
@@ -1041,4 +1046,3 @@ def radar_record_map(raster, gdf, record_id):
 
     ax.set_axis_off()
     return _save(fig)
-
