@@ -423,41 +423,45 @@ def raster_map(
     if not sectors:
         sectors = [None]
 
-    # Composición modular según cantidad de sectores.
-    # 1: un panel completo; 2: dos paneles horizontales;
-    # 3: dos paneles apilados a la izquierda y uno alto a la derecha;
-    # 4: grilla 2 x 2. El orden sigue la secuencia espacial de sectors.
+    # Composición modular compacta. Los paneles quedan contiguos,
+    # separados únicamente por una línea blanca fina.
     n = len(sectors)
-    fig = plt.figure(figsize=(12, 7.2))
+    fig = plt.figure(figsize=(12, 7.2), facecolor="white")
     if n == 1:
-        grid = fig.add_gridspec(1, 1, left=0.025, right=0.975,
-                                top=0.94, bottom=0.18)
+        grid = fig.add_gridspec(1, 1, left=0.012, right=0.988,
+                                top=0.985, bottom=0.18)
         axes_list = [fig.add_subplot(grid[0, 0])]
+        display_order = [0]
     elif n == 2:
-        grid = fig.add_gridspec(1, 2, left=0.025, right=0.975,
-                                top=0.94, bottom=0.18, wspace=0.035)
+        grid = fig.add_gridspec(1, 2, left=0.012, right=0.988,
+                                top=0.985, bottom=0.18, wspace=0.006)
         axes_list = [fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[0, 1])]
+        display_order = [0, 1]
+    elif n == 3:
+        # En el establecimiento Valle Manzano, la agrupación geográfica
+        # detectada como sector 3 es la primera chacra: va arriba a la
+        # izquierda. El sector 2 permanece abajo a la izquierda y el
+        # sector 1 (cuatro chacras) ocupa el panel grande de la derecha.
+        grid = fig.add_gridspec(2, 2, left=0.012, right=0.988,
+                                top=0.985, bottom=0.18,
+                                wspace=0.006, hspace=0.010)
+        axes_list = [
+            fig.add_subplot(grid[0, 0]),
+            fig.add_subplot(grid[1, 0]),
+            fig.add_subplot(grid[:, 1]),
+        ]
+        display_order = [2, 1, 0]
     else:
-        grid = fig.add_gridspec(2, 2, left=0.025, right=0.975,
-                                top=0.94, bottom=0.18,
-                                wspace=0.035, hspace=0.055)
-        if n == 3:
-            # Orden de lectura: superior izquierdo, inferior izquierdo,
-            # y panel vertical derecho (composición solicitada).
-            positions = [(0, 0), (1, 0), (slice(0, 2), 1)]
-        else:
-            positions = [(0, 0), (0, 1), (1, 0), (1, 1)]
-        axes_list = []
-        for idx in range(n):
-            row, col = positions[idx]
-            if isinstance(row, slice):
-                axes_list.append(fig.add_subplot(grid[row, col]))
-            else:
-                axes_list.append(fig.add_subplot(grid[row, col]))
+        grid = fig.add_gridspec(2, 2, left=0.012, right=0.988,
+                                top=0.985, bottom=0.18,
+                                wspace=0.006, hspace=0.010)
+        positions = [(0, 0), (0, 1), (1, 0), (1, 1)]
+        axes_list = [fig.add_subplot(grid[r, c]) for r, c in positions]
+        display_order = list(range(n))
 
     masked = np.ma.masked_where((~np.isfinite(data)) | (data <= -9998), data)
-    for idx, ax in enumerate(axes_list):
-        sector = sectors[idx]
+    for panel_idx, ax in enumerate(axes_list):
+        sector = sectors[display_order[panel_idx]]
         if sector is None:
             minx, miny, maxx, maxy = bounds.left, bounds.bottom, bounds.right, bounds.top
             sector_plot = None
@@ -476,8 +480,11 @@ def raster_map(
         if sector_plot is not None and not sector_plot.empty:
             sector_plot.boundary.plot(ax=ax, color="white", linewidth=0.85, alpha=0.98)
         ax.set_axis_off()
-        ax.set_title(f"SECTOR {idx + 1}" if n > 1 else "",
-                     loc="left", fontsize=9, fontweight="bold", color=CHARCOAL, pad=2)
+        # Borde blanco fino: delimita cada panel sin separarlos visualmente.
+        for spine in ax.spines.values():
+            spine.set_visible(True)
+            spine.set_color("white")
+            spine.set_linewidth(1.2)
 
     if vmin is not None and vmax is not None:
         import matplotlib as mpl
@@ -1046,3 +1053,4 @@ def radar_record_map(raster, gdf, record_id):
 
     ax.set_axis_off()
     return _save(fig)
+
