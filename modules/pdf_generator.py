@@ -159,6 +159,21 @@ def _latest_s2_date(df):
     return values.max().strftime("%d/%m/%Y")
 
 
+def _latest_s1_date(df):
+    if df.empty or "ultima_pasada_S1" not in df.columns:
+        return "—"
+
+    values = pd.to_datetime(
+        df["ultima_pasada_S1"],
+        errors="coerce"
+    ).dropna()
+
+    if values.empty:
+        return "—"
+
+    return values.max().strftime("%d/%m/%Y")
+
+
 def _priority_donut(high, medium, follow):
     fig, ax = plt.subplots(figsize=(4.6, 3.1))
 
@@ -387,87 +402,181 @@ def _general_state(row):
     return "Seguimiento"
 
 
+def _interpretation_sections(row, radar_only=False):
+    """
+    Organiza en una lectura comprensible los campos ya calculados por AGIS.
+    No genera diagnósticos, no recalcula indicadores ni modifica prioridades.
+    """
+    def value(field, fallback=""):
+        if field not in row.index or pd.isna(row[field]):
+            return fallback
+        return str(row[field]).strip()
+
+    if radar_only:
+        radar = _sar_metrics(row)
+        radar_line = (
+            f"VV actual: {radar['vv_actual']} dB · "
+            f"VV anterior: {radar['vv_anterior']} dB · "
+            f"variación: {radar['delta']} dB."
+        )
+        if radar["comparison"] not in ("—", ""):
+            radar_line += f" Comparación: {radar['comparison']}."
+        return [
+            (
+                "Evidencia disponible",
+                "No hubo evidencia óptica válida suficiente para este lote durante el período. AGIS mantiene el seguimiento mediante observaciones Sentinel-1 SAR."
+            ),
+            ("Lectura del radar", radar_line),
+            (
+                "Interpretación y alcance",
+                "La variación de la señal VV aporta continuidad al monitoreo, pero por sí sola no permite establecer una causa agronómica ni inferir el estado de NDMI o NDRE."
+            ),
+            ("Qué conviene verificar", value("que_revisar", "Mantener el seguimiento y contrastar la evolución del cultivo con su contexto fenológico.")),
+            ("Limitaciones", value("limitaciones", "La interpretación se limita a la evidencia radar disponible y a su comparabilidad temporal.")),
+        ]
+
+    ndmi = value("senal_relativa_NDMI", "NO_INFORMADA").upper()
+    ndre = value("senal_relativa_NDRE", "NO_INFORMADA").upper()
+    conv = value("convergencia", "").lower()
+    ndmi_label = _state_signal(row, "senal_relativa_NDMI", "ndmi")
+    ndre_label = _state_signal(row, "senal_relativa_NDRE", "ndre")
+
+    if conv in ("true", "1", "sí", "si", "yes"):
+        relation = (
+            f"Hay convergencia: NDMI ({ndmi_label.lower()}) y NDRE "
+            f"({ndre_label.lower()}) presentan una respuesta relativa coincidente. "
+            "Esto refuerza la consistencia de la señal, pero no identifica por sí solo su causa."
+        )
+    elif conv in ("false", "0", "no"):
+        relation = (
+            f"No hay convergencia entre los indicadores: NDMI ({ndmi_label.lower()}) "
+            f"y NDRE ({ndre_label.lower()}) no muestran una respuesta coincidente. "
+            "La señal debe leerse de manera diferenciada, sin asumir un efecto común."
+        )
+    else:
+        relation = (
+            f"La relación entre indicadores no puede establecerse con la información disponible "
+            f"(NDMI: {ndmi_label.lower()}; NDRE: {ndre_label.lower()})."
+        )
+
+    sar = _sar_metrics(row)
+    sar_available = _is_true(value("SAR_disponible", "false"))
+    if not sar_available:
+        radar_text = "No hay evidencia SAR disponible para complementar esta lectura."
+    elif sar["delta"] != "—":
+        radar_text = (
+            f"VV actual: {sar['vv_actual']} dB; anterior: {sar['vv_anterior']} dB; "
+            f"variación informada: {sar['delta']} dB."
+        )
+        if sar["comparison"] not in ("—", ""):
+            radar_text += f" {sar['comparison']}."
+        radar_text += " El radar se presenta como evidencia complementaria; no se fuerza una equivalencia con NDMI o NDRE."
+    else:
+        radar_text = "Hay disponibilidad SAR, pero el CSV no aporta una variación VV interpretable para esta ficha."
+
+    fenologia = value("fenologia_etapa", "")
+    dias = value("dias_desde_siembra", "")
+    phenology_text = f"Etapa fenológica: {fenologia}." if fenologia else ""
+    if dias:
+        phenology_text += f" Días desde siembra: {dias}."
+    observation = value("hallazgo_agis", "AGIS no informó un hallazgo textual.")
+    # El CSV puede incluir dentro del hallazgo una oración sobre SAR.
+    # Se separa para que esa evidencia aparezca una sola vez en su bloque propio.
+    observation = re.sub(
+        r"\s*La señal radar .*?(?=\s*Última observación S1 válida:|$)",
+        "",
+        observation,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    alternatives = value("hipotesis_alternativas", "")
+    limits = value("limitaciones", "")
+    scope = " ".join(part for part in (alternatives, limits) if part)
+    if not scope:
+        scope = "La señal satelital no determina por sí sola una causa agronómica."
+
+    return [
+        ("Qué observamos", observation),
+        ("Cómo se relacionan las evidencias", relation),
+        ("Qué aporta el radar", radar_text),
+        ("Qué significa para el seguimiento", value("hipotesis_agis", "—")),
+        ("Qué conviene verificar", value("que_revisar", "—")),
+        ("Alcance de la interpretación", scope),
+    ]
+
+
+def _interpretation_table(row, body, small, radar_only=False):
+    """Construye la ficha interpretativa a partir de campos existentes del CSV."""
+    sections = _interpretation_sections(row, radar_only=radar_only)
+    rows = []
+    for label, text in sections:
+        rows.append([
+            Paragraph(
+                f"<b>{label}</b>",
+                ParagraphStyle(
+                    f"InterpretationLabel{label}",
+                    parent=small,
+                    fontName=FONT_BOLD,
+                    fontSize=8.8,
+                    leading=11,
+                    textColor=colors.HexColor(CHARCOAL),
+                )
+            ),
+            Paragraph(
+                text or "—",
+                ParagraphStyle(
+                    f"InterpretationBody{label}",
+                    parent=small,
+                    fontName=FONT_REGULAR,
+                    fontSize=8.2,
+                    leading=10.5,
+                    textColor=colors.HexColor(CHARCOAL),
+                )
+            )
+        ])
+    table = RoundedTable(
+        rows,
+        colWidths=[43 * mm, 132 * mm],
+        radius=7,
+        panel_fill=colors.white,
+        panel_stroke=colors.HexColor("#CDD6D1")
+    )
+    style = [
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]
+    for r in range(len(rows)):
+        style.extend([
+            ("BACKGROUND", (0, r), (0, r), colors.HexColor("#F0F6F2" if r % 2 == 0 else "#F7F9F7")),
+            ("LINEBEFORE", (0, r), (0, r), 2, colors.HexColor(GREEN if not radar_only else "#5C625F")),
+        ])
+    table.setStyle(TableStyle(style))
+    return table
+
 def _temporal_trend_cell(row, index_name, trend_cell_style):
-    """
-    Presenta el delta temporal calculado por AGIS.
-    No recalcula índices ni transforma la variación en diagnóstico.
-    """
+    """Muestra solo la variación temporal, sin fechas ni metadatos secundarios."""
     suffix = index_name.upper()
     delta_field = f"delta_{index_name.lower()}"
     state_field = f"estado_comparacion_{suffix}"
-    count_field = f"observaciones_referencia_{suffix}_temporal"
-    start_field = f"fecha_referencia_inicio_{suffix}"
-    end_field = f"fecha_referencia_fin_{suffix}"
-
-    state = (
-        str(row[state_field]).strip().upper()
-        if state_field in row.index and pd.notna(row[state_field])
-        else ""
-    )
-
+    state = str(row[state_field]).strip().upper() if state_field in row.index and pd.notna(row[state_field]) else ""
     value = row[delta_field] if delta_field in row.index else None
     if state.startswith("NO_") or value is None or pd.isna(value):
-        if _is_radar_only(row):
-            return Paragraph(
-                "<b>— Sin dato óptico</b><br/><font size='5.8'>Seguimiento por SAR</font>",
-                ParagraphStyle(
-                    f"TrendMissingSAR_{suffix}",
-                    parent=trend_cell_style,
-                    textColor=colors.HexColor("#626A66"),
-                )
-            )
-        return Paragraph(
-            "<b>— Sin dato</b><br/><font size='5.8'>Sin referencia temporal válida</font>",
-            ParagraphStyle(
-                f"TrendMissing_{suffix}",
-                parent=trend_cell_style,
-                textColor=colors.HexColor("#626A66"),
-            )
-        )
-
+        label = "Sin dato óptico" if _is_radar_only(row) else "Sin dato"
+        return Paragraph(f"<font color='#777F7A'><b>— {label}</b></font>", trend_cell_style)
     try:
         delta = float(value)
     except (TypeError, ValueError):
-        return Paragraph(
-            "<b>— Sin dato</b>",
-            ParagraphStyle(
-                f"TrendInvalid_{suffix}",
-                parent=trend_cell_style,
-                textColor=colors.HexColor("#626A66"),
-            )
-        )
-
+        return Paragraph("<font color='#777F7A'><b>—</b></font>", trend_cell_style)
     if delta > 0:
         arrow, color_hex = "↑", "#25834A"
     elif delta < 0:
         arrow, color_hex = "↓", "#C43D42"
     else:
         arrow, color_hex = "→", "#626A66"
-
-    count = row[count_field] if count_field in row.index else None
-    count_text = (
-        f"n={int(float(count))}"
-        if count is not None and pd.notna(count)
-        else "n=s/d"
-    )
-
-    start_date = row[start_field] if start_field in row.index else None
-    end_date = row[end_field] if end_field in row.index else None
-
-    def short_date(value):
-        if value is None or pd.isna(value):
-            return None
-        parsed = pd.to_datetime(value, errors="coerce")
-        return parsed.strftime("%d/%m") if pd.notna(parsed) else None
-
-    d1, d2 = short_date(start_date), short_date(end_date)
-    period = f"{d1}–{d2}" if d1 and d2 else "período s/d"
-
-    return Paragraph(
-        f"<font color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>"
-        f"<br/><font size='5.8'>{count_text} · {period}</font>",
-        trend_cell_style
-    )
+    return Paragraph(f"<font color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>", trend_cell_style)
 
 
 def _state_table(df, body, small):
@@ -680,6 +789,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
     )
 
     latest_s2 = _latest_s2_date(df)
+    latest_s1 = _latest_s1_date(df)
     report_date = date.today().strftime("%d/%m/%Y")
     doc._agis_pdf_title = f"AGIS - Informe de monitoreo - {client_name} - {report_date}"
 
@@ -710,7 +820,12 @@ def build_pdf(df, gdf, raster, logo_bytes):
         ),
         Spacer(1, 1.5 * mm),
         Paragraph(
-            f"Última observación satelital: {latest_s2}",
+            f"Última observación óptica (Sentinel-2): {latest_s2}",
+            body
+        ),
+        Spacer(1, 1.5 * mm),
+        Paragraph(
+            f"Última observación radar (Sentinel-1): {latest_s1}",
             body
         )
     ]
@@ -1346,79 +1461,9 @@ def build_pdf(df, gdf, raster, logo_bytes):
         story.append(Spacer(1, 3 * mm))
 
         # -----------------------------------------------------
-        # TRES BLOQUES DE LECTURA
+        # FICHA INTERPRETATIVA — SEIS BLOQUES
         # -----------------------------------------------------
-        cards = [
-            (
-                "¿Por qué aparece?",
-                _value_text(row, "hallazgo_agis"),
-                "#FF1744",
-                "#FFF4F5"
-            ),
-            (
-                "¿Qué muestra AGIS?",
-                _value_text(row, "hipotesis_agis"),
-                GREEN,
-                "#F0F6F2"
-            ),
-            (
-                "¿Qué revisar?",
-                _value_text(row, "que_revisar"),
-                "#2AA6A0",
-                "#EFF9F8"
-            ),
-        ]
-
-        card_rows = []
-        for label, value, accent, bg in cards:
-            card_rows.append([
-                Paragraph(
-                    f"<b>{label}</b>",
-                    ParagraphStyle(
-                        f"CardLabel{label}",
-                        parent=small,
-                        fontName=FONT_BOLD,
-                        fontSize=9.5,
-                        leading=12,
-                        textColor=colors.HexColor(CHARCOAL)
-                    )
-                ),
-                Paragraph(
-                    value,
-                    ParagraphStyle(
-                        f"CardBody{label}",
-                        parent=small,
-                        fontName=FONT_REGULAR,
-                        fontSize=8.6,
-                        leading=11.2,
-                        textColor=colors.HexColor(CHARCOAL)
-                    )
-                )
-            ])
-
-        info = RoundedTable(
-            card_rows,
-            colWidths=[43 * mm, 132 * mm],
-            radius=7,
-            panel_fill=colors.white,
-            panel_stroke=colors.HexColor("#CDD6D1")
-        )
-
-        info_style = [
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ]
-
-        for r, (_, _, accent, bg) in enumerate(cards):
-            info_style.extend([
-                ("BACKGROUND", (0, r), (0, r), colors.HexColor(bg)),
-                ("LINEBEFORE", (0, r), (0, r), 3, colors.HexColor(accent)),
-            ])
-
-        info.setStyle(TableStyle(info_style))
+        info = _interpretation_table(row, body, small, radar_only=False)
         story.append(info)
         story.append(Spacer(1, 4 * mm))
 
@@ -1704,76 +1749,8 @@ def build_pdf(df, gdf, raster, logo_bytes):
             story.append(radar_banner)
             story.append(Spacer(1, 4 * mm))
 
-            cards = [
-                (
-                    "¿Por qué se monitorea con radar?",
-                    _value_text(row, "hallazgo_agis"),
-                    "#4A4F4C",
-                    "#ECEEED"
-                ),
-                (
-                    "¿Qué muestra el radar?",
-                    _value_text(row, "hipotesis_agis"),
-                    "#5C625F",
-                    "#F0F1F0"
-                ),
-                (
-                    "¿Qué revisar?",
-                    _value_text(row, "que_revisar"),
-                    "#5C625F",
-                    "#F0F1F0"
-                ),
-            ]
-
-            card_rows = []
-            for label, value, accent, bg in cards:
-                card_rows.append([
-                    Paragraph(
-                        f"<b>{label}</b>",
-                        ParagraphStyle(
-                            f"RadarCardLabel{label}",
-                            parent=small,
-                            fontName=FONT_BOLD,
-                            fontSize=9.5,
-                            leading=12,
-                            textColor=colors.HexColor(CHARCOAL)
-                        )
-                    ),
-                    Paragraph(
-                        value,
-                        ParagraphStyle(
-                            f"RadarCardBody{label}",
-                            parent=small,
-                            fontName=FONT_REGULAR,
-                            fontSize=8.6,
-                            leading=11.2,
-                            textColor=colors.HexColor(CHARCOAL)
-                        )
-                    )
-                ])
-
-            info = Table(
-                card_rows,
-                colWidths=[43 * mm, 132 * mm]
-            )
-
-            info_style = [
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#C4C8C6")),
-                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9DCDA")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]
-
-            for r, (_, _, accent, bg) in enumerate(cards):
-                info_style.extend([
-                    ("BACKGROUND", (0, r), (0, r), colors.HexColor(bg)),
-                    ("LINEBEFORE", (0, r), (0, r), 3, colors.HexColor(accent)),
-                ])
-
-            info.setStyle(TableStyle(info_style))
+            # Ficha SAR exclusiva: no presenta NDMI/NDRE como evidencia disponible.
+            info = _interpretation_table(row, body, small, radar_only=True)
             story.append(info)
             story.append(Spacer(1, 4 * mm))
 
