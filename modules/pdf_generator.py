@@ -1128,10 +1128,52 @@ def build_pdf(df, gdf, raster, logo_bytes):
         Spacer(1, 3 * mm)
     )
 
+    story.append(Spacer(1, 2 * mm))
+
+    # Leyenda explícita, con los mismos colores definidos en maps.py.
+    legend_style = ParagraphStyle(
+        "PriorityMapLegendV4",
+        parent=small,
+        fontName=FONT_BOLD,
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor(CHARCOAL),
+    )
+    legend_items = [
+        ("#FF1744", "Prioridad alta"),
+        ("#FFF000", "Prioridad media"),
+        ("#00FF66", "Seguimiento"),
+    ]
+    legend_cells = []
+    for color_hex, label in legend_items:
+        swatch = Table(
+            [[Paragraph(" ", small)]],
+            colWidths=[5 * mm],
+            rowHeights=[3 * mm],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(color_hex)),
+                ("BOX", (0, 0), (-1, -1), 0.3, colors.HexColor("#B9C1BC")),
+            ])
+        )
+        legend_cells.extend([swatch, Paragraph(label, legend_style)])
+
+    legend = Table(
+        [legend_cells],
+        colWidths=[7 * mm, 48 * mm, 7 * mm, 48 * mm, 7 * mm, 48 * mm],
+        hAlign="LEFT",
+    )
+    legend.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 1),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    story.append(legend)
+    story.append(Spacer(1, 1.5 * mm))
     story.append(
         Paragraph(
-            "La distribución de prioridades permite identificar "
-            "rápidamente dónde concentrar la recorrida.",
+            "La distribución espacial permite localizar los lotes según su prioridad de atención.",
             small
         )
     )
@@ -1220,6 +1262,19 @@ def build_pdf(df, gdf, raster, logo_bytes):
                     height=105 * mm
                 )
             )
+            story.append(Spacer(1, 1.5 * mm))
+            story.append(
+                Paragraph(
+                    "Las escalas representan valores de los índices. Su lectura debe considerar el cultivo, el momento fenológico y la comparación entre lotes; los colores no constituyen por sí solos un diagnóstico agronómico.",
+                    ParagraphStyle(
+                        "IndexMapReadingNoteV4",
+                        parent=small,
+                        fontSize=7.4,
+                        leading=9,
+                        textColor=colors.HexColor("#5A5F5C")
+                    )
+                )
+            )
 
     # La tabla comienza en una página independiente.
     story.append(PageBreak())
@@ -1244,7 +1299,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
         story.append(Spacer(1, 3 * mm))
         story.append(
             Paragraph(
-                "Las flechas muestran la variación temporal de cada índice respecto de su referencia anterior (NDMI y NDRE por separado). Verde = aumento; rojo = disminución. Se informa la cantidad de observaciones y el período de referencia. La dirección del cambio no constituye por sí sola una mejora, deterioro ni diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
+                "Las flechas muestran la variación temporal de cada índice respecto de su referencia anterior (NDMI y NDRE por separado). La cantidad de escenas y el período de referencia pueden variar entre índices y se conservan en el CSV. Un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
                 ParagraphStyle(
                     "StateNote",
                     parent=small,
