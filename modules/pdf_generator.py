@@ -387,35 +387,123 @@ def _general_state(row):
     return "Seguimiento"
 
 
+def _temporal_trend_cell(row, index_name, trend_cell_style):
+    """
+    Presenta el delta temporal calculado por AGIS.
+    No recalcula índices ni transforma la variación en diagnóstico.
+    """
+    suffix = index_name.upper()
+    delta_field = f"delta_{index_name.lower()}"
+    state_field = f"estado_comparacion_{suffix}"
+    count_field = f"observaciones_referencia_{suffix}_temporal"
+    start_field = f"fecha_referencia_inicio_{suffix}"
+    end_field = f"fecha_referencia_fin_{suffix}"
+
+    state = (
+        str(row[state_field]).strip().upper()
+        if state_field in row.index and pd.notna(row[state_field])
+        else ""
+    )
+
+    value = row[delta_field] if delta_field in row.index else None
+    if state.startswith("NO_") or value is None or pd.isna(value):
+        if _is_radar_only(row):
+            return Paragraph(
+                "<b>— Sin dato óptico</b><br/><font size='5.8'>Seguimiento por SAR</font>",
+                ParagraphStyle(
+                    f"TrendMissingSAR_{suffix}",
+                    parent=trend_cell_style,
+                    textColor=colors.HexColor("#626A66"),
+                )
+            )
+        return Paragraph(
+            "<b>— Sin dato</b><br/><font size='5.8'>Sin referencia temporal válida</font>",
+            ParagraphStyle(
+                f"TrendMissing_{suffix}",
+                parent=trend_cell_style,
+                textColor=colors.HexColor("#626A66"),
+            )
+        )
+
+    try:
+        delta = float(value)
+    except (TypeError, ValueError):
+        return Paragraph(
+            "<b>— Sin dato</b>",
+            ParagraphStyle(
+                f"TrendInvalid_{suffix}",
+                parent=trend_cell_style,
+                textColor=colors.HexColor("#626A66"),
+            )
+        )
+
+    if delta > 0:
+        arrow, color_hex = "↑", "#25834A"
+    elif delta < 0:
+        arrow, color_hex = "↓", "#C43D42"
+    else:
+        arrow, color_hex = "→", "#626A66"
+
+    count = row[count_field] if count_field in row.index else None
+    count_text = (
+        f"n={int(float(count))}"
+        if count is not None and pd.notna(count)
+        else "n=s/d"
+    )
+
+    start_date = row[start_field] if start_field in row.index else None
+    end_date = row[end_field] if end_field in row.index else None
+
+    def short_date(value):
+        if value is None or pd.isna(value):
+            return None
+        parsed = pd.to_datetime(value, errors="coerce")
+        return parsed.strftime("%d/%m") if pd.notna(parsed) else None
+
+    d1, d2 = short_date(start_date), short_date(end_date)
+    period = f"{d1}–{d2}" if d1 and d2 else "período s/d"
+
+    return Paragraph(
+        f"<font color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>"
+        f"<br/><font size='5.8'>{count_text} · {period}</font>",
+        trend_cell_style
+    )
+
+
 def _state_table(df, body, small):
     follow_df = df[df["prioridad"] == "SEGUIMIENTO"].copy()
     if follow_df.empty:
         return None
 
-    # Los encabezados son Paragraph, por lo que el TEXTCOLOR de
-    # TableStyle no alcanza a cambiar el color interno del texto.
-    # Creamos un estilo específico para el encabezado con texto blanco.
     header_style = ParagraphStyle(
         "AGIS_TableHeaderWhite",
         parent=small,
         textColor=colors.white,
         fontName=FONT_BOLD,
+        fontSize=6.4,
+        leading=7,
+    )
+
+    trend_cell_style = ParagraphStyle(
+        "AGIS_TemporalTrendCell",
+        parent=small,
+        fontSize=6.8,
+        leading=7.2,
+        spaceAfter=0,
     )
 
     rows = [[
         Paragraph("ESTABLECIMIENTO", header_style),
         Paragraph("LOTE", header_style),
         Paragraph("MODALIDAD", header_style),
-        Paragraph("AGUA VEGETAL", header_style),
-        Paragraph("CLOROFILA", header_style),
+        Paragraph("AGUA VEGETAL<br/>NDMI · EVOLUCIÓN", header_style),
+        Paragraph("CLOROFILA<br/>NDRE · EVOLUCIÓN", header_style),
         Paragraph("ESTADO GENERAL", header_style),
     ]]
     states = []
 
     for _, row in follow_df.iterrows():
         mode = _monitoring_mode(row)
-        agua = _state_signal(row, "senal_relativa_NDMI", "ndmi")
-        cloro = _state_signal(row, "senal_relativa_NDRE", "ndre")
         estado = _general_state(row)
         states.append(estado.lower())
 
@@ -423,14 +511,14 @@ def _state_table(df, body, small):
             Paragraph(f"<b>{_fmt(row['establecimiento'])}</b>", small),
             Paragraph(f"<b>{_fmt(row['lote'])}</b>", small),
             Paragraph(mode.replace("MONITOREO ", ""), small),
-            Paragraph(agua, small),
-            Paragraph(cloro, small),
+            _temporal_trend_cell(row, "ndmi", trend_cell_style),
+            _temporal_trend_cell(row, "ndre", trend_cell_style),
             Paragraph(estado, small),
         ])
 
     table = Table(
         rows,
-        colWidths=[34 * mm, 24 * mm, 27 * mm, 31 * mm, 31 * mm, 28 * mm],
+        colWidths=[32 * mm, 20 * mm, 25 * mm, 37 * mm, 37 * mm, 24 * mm],
         repeatRows=1
     )
 
@@ -441,10 +529,10 @@ def _state_table(df, body, small):
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#D0D6D2")),
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#E0E4E1")),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 3.2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3.2),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 1.2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1.2),
     ]
 
     for r, state in enumerate(states, start=1):
@@ -494,164 +582,6 @@ def _sar_metrics(row):
         "comparison": comparison,
         "s1_date": s1_date,
     }
-
-
-
-def _temporal_optical_table(row, body, small):
-    """
-    Presenta la comparación temporal óptica ya calculada por AGIS.
-    No recalcula índices ni modifica prioridades o interpretaciones.
-    Devuelve None para CSV antiguos sin columnas temporales.
-    """
-    required = {
-        "ndre_anterior", "ndmi_anterior",
-        "delta_ndre", "delta_ndmi",
-        "estado_comparacion_NDRE", "estado_comparacion_NDMI"
-    }
-    if not required.issubset(set(row.index)):
-        return None
-
-    def _number(field, signed=False):
-        value = row[field] if field in row.index else None
-        if value is None or pd.isna(value):
-            return "—"
-        try:
-            number = float(value)
-            return f"{number:+.3f}" if signed else f"{number:.3f}"
-        except (TypeError, ValueError):
-            return "—"
-
-    def _date(field):
-        value = row[field] if field in row.index else None
-        if value is None or pd.isna(value) or str(value).strip() == "":
-            return "—"
-        parsed = pd.to_datetime(value, errors="coerce")
-        return parsed.strftime("%d/%m/%Y") if pd.notna(parsed) else str(value)
-
-    def _index_row(label, previous_field, delta_field, count_field,
-                   start_field, end_field, status_field):
-        status = str(row[status_field]).strip().upper() if status_field in row.index else ""
-        if not status.startswith("DISPONIBLE"):
-            return [
-                Paragraph(f"<b>{label}</b>", small),
-                Paragraph("No disponible", small),
-                Paragraph("—", small),
-                Paragraph("—", small),
-                Paragraph("Sin comparación óptica utilizable", small),
-            ]
-
-        count_value = row[count_field] if count_field in row.index else None
-        try:
-            count = int(float(count_value)) if pd.notna(count_value) else 0
-        except (TypeError, ValueError):
-            count = 0
-
-        count_label = f"{count} escena" if count == 1 else f"{count} escenas"
-        period = f"{_date(start_field)} – {_date(end_field)}"
-        return [
-            Paragraph(f"<b>{label}</b>", small),
-            Paragraph(_number(previous_field), small),
-            Paragraph(_number(delta_field, signed=True), small),
-            Paragraph(count_label, small),
-            Paragraph(period, small),
-        ]
-
-    rows = [
-        [
-            Paragraph("<b>Índice</b>", small),
-            Paragraph("<b>Anterior</b>", small),
-            Paragraph("<b>Cambio</b>", small),
-            Paragraph("<b>Referencia</b>", small),
-            Paragraph("<b>Período histórico</b>", small),
-        ],
-        _index_row(
-            "NDRE", "ndre_anterior", "delta_ndre",
-            "observaciones_referencia_NDRE_temporal",
-            "fecha_referencia_inicio_NDRE", "fecha_referencia_fin_NDRE",
-            "estado_comparacion_NDRE"
-        ),
-        _index_row(
-            "NDMI", "ndmi_anterior", "delta_ndmi",
-            "observaciones_referencia_NDMI_temporal",
-            "fecha_referencia_inicio_NDMI", "fecha_referencia_fin_NDMI",
-            "estado_comparacion_NDMI"
-        ),
-    ]
-
-    table = Table(
-        rows,
-        colWidths=[19 * mm, 25 * mm, 25 * mm, 29 * mm, 77 * mm],
-        repeatRows=1
-    )
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EFEB")),
-        ("BACKGROUND", (0, 1), (-1, -1), colors.white),
-        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5CF")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#E0E6E2")),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-    ]))
-
-    notes = []
-    for label, count_field, status_field in (
-        ("NDRE", "observaciones_referencia_NDRE_temporal", "estado_comparacion_NDRE"),
-        ("NDMI", "observaciones_referencia_NDMI_temporal", "estado_comparacion_NDMI"),
-    ):
-        status = str(row[status_field]).strip().upper() if status_field in row.index else ""
-        if status.startswith("DISPONIBLE"):
-            value = row[count_field] if count_field in row.index else None
-            try:
-                count = int(float(value)) if pd.notna(value) else 0
-            except (TypeError, ValueError):
-                count = 0
-            if count == 1:
-                notes.append(f"{label}: referencia puntual de una escena; no describe una tendencia robusta.")
-
-    if notes:
-        note = Paragraph(
-            " ".join(notes),
-            ParagraphStyle(
-                "TemporalOpticalCaution",
-                parent=small,
-                fontSize=7,
-                leading=8.5,
-                textColor=colors.HexColor("#626B66"),
-                spaceBefore=2
-            )
-        )
-    else:
-        note = Paragraph(
-            "El cambio expresa la diferencia entre el valor actual y la referencia histórica; no constituye por sí solo un diagnóstico agronómico.",
-            ParagraphStyle(
-                "TemporalOpticalNote",
-                parent=small,
-                fontSize=7,
-                leading=8.5,
-                textColor=colors.HexColor("#626B66"),
-                spaceBefore=2
-            )
-        )
-
-    return [
-        Paragraph(
-            "<b>Evolución temporal de índices ópticos</b>",
-            ParagraphStyle(
-                "TemporalOpticalTitle",
-                parent=small,
-                fontName=FONT_BOLD,
-                fontSize=8.5,
-                leading=10,
-                textColor=colors.HexColor(CHARCOAL),
-                spaceBefore=1,
-                spaceAfter=3
-            )
-        ),
-        table,
-        note
-    ]
 
 
 def build_pdf(df, gdf, raster, logo_bytes):
@@ -1199,7 +1129,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
         story.append(Spacer(1, 3 * mm))
         story.append(
             Paragraph(
-                "“Señal baja relativa” indica una desviación respecto del conjunto comparable utilizada por AGIS como evidencia de seguimiento; no equivale por sí sola a un diagnóstico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
+                "Las flechas muestran la variación temporal de cada índice respecto de su referencia anterior (NDMI y NDRE por separado). Verde = aumento; rojo = disminución. Se informa la cantidad de observaciones y el período de referencia. La dirección del cambio no constituye por sí sola una mejora, deterioro ni diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
                 ParagraphStyle(
                     "StateNote",
                     parent=small,
@@ -1561,16 +1491,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
             ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
         ]))
         story.append(indicators)
-        story.append(Spacer(1, 2 * mm))
-
-        # -----------------------------------------------------
-        # COMPARACIÓN TEMPORAL ÓPTICA — SOLO PRESENTACIÓN CSV
-        # -----------------------------------------------------
-        temporal_block = _temporal_optical_table(row, body, small)
-        if temporal_block:
-            for temporal_item in temporal_block:
-                story.append(temporal_item)
-            story.append(Spacer(1, 2 * mm))
+        story.append(Spacer(1, 3 * mm))
 
         # -----------------------------------------------------
         # MAPA
@@ -1626,7 +1547,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
                 Image(
                     map_img,
                     width=175 * mm,
-                    height=88 * mm
+                    height=104 * mm
                 )
             )
         else:
