@@ -1465,7 +1465,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
         # -----------------------------------------------------
         info = _interpretation_table(row, body, small, radar_only=False)
         story.append(info)
-        story.append(Spacer(1, 4 * mm))
+        story.append(Spacer(1, 2 * mm))
 
         # -----------------------------------------------------
         # INDICADORES — versión simple
@@ -1536,7 +1536,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
             ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
         ]))
         story.append(indicators)
-        story.append(Spacer(1, 3 * mm))
+        story.append(Spacer(1, 2 * mm))
 
         # -----------------------------------------------------
         # MAPA
@@ -1589,11 +1589,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
 
         if map_img:
             story.append(
-                Image(
-                    map_img,
-                    width=175 * mm,
-                    height=104 * mm
-                )
+                Image(map_img, width=145 * mm, height=(145 * 104 / 175) * mm)
             )
         else:
             story.append(
@@ -1824,11 +1820,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
 
             if map_img:
                 story.append(
-                    Image(
-                        map_img,
-                        width=175 * mm,
-                        height=104 * mm
-                    )
+                    Image(map_img, width=145 * mm, height=(145 * 104 / 175) * mm)
                 )
             else:
                 story.append(
