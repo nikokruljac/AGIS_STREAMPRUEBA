@@ -579,8 +579,11 @@ def _temporal_trend_cell(row, index_name, trend_cell_style):
     return Paragraph(f"<font color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>", trend_cell_style)
 
 
-def _state_table(df, body, small):
-    follow_df = df[df["prioridad"] == "SEGUIMIENTO"].copy()
+def _state_table(df, body, small, follow_df=None):
+    if follow_df is None:
+        follow_df = df[df["prioridad"] == "SEGUIMIENTO"].copy()
+    else:
+        follow_df = follow_df.copy()
     if follow_df.empty:
         return None
 
@@ -589,15 +592,22 @@ def _state_table(df, body, small):
         parent=small,
         textColor=colors.white,
         fontName=FONT_BOLD,
-        fontSize=6.4,
-        leading=7,
+        fontSize=7.2,
+        leading=8.2,
+    )
+
+    state_cell_style = ParagraphStyle(
+        "AGIS_StateTableCell",
+        parent=small,
+        fontSize=8.8,
+        leading=10.2,
     )
 
     trend_cell_style = ParagraphStyle(
         "AGIS_TemporalTrendCell",
         parent=small,
-        fontSize=6.8,
-        leading=7.2,
+        fontSize=8.9,
+        leading=10.2,
         spaceAfter=0,
     )
 
@@ -617,12 +627,12 @@ def _state_table(df, body, small):
         states.append(estado.lower())
 
         rows.append([
-            Paragraph(f"<b>{_fmt(row['establecimiento'])}</b>", small),
-            Paragraph(f"<b>{_fmt(row['lote'])}</b>", small),
-            Paragraph(mode.replace("MONITOREO ", ""), small),
+            Paragraph(f"<b>{_fmt(row['establecimiento'])}</b>", state_cell_style),
+            Paragraph(f"<b>{_fmt(row['lote'])}</b>", state_cell_style),
+            Paragraph(mode.replace("MONITOREO ", ""), state_cell_style),
             _temporal_trend_cell(row, "ndmi", trend_cell_style),
             _temporal_trend_cell(row, "ndre", trend_cell_style),
-            Paragraph(estado, small),
+            Paragraph(estado, state_cell_style),
         ])
 
     table = Table(
@@ -640,8 +650,8 @@ def _state_table(df, body, small):
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#E0E4E1")),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 1.2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 1.2),
+        ("TOPPADDING", (0, 0), (-1, -1), 3.0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3.0),
     ]
 
     for r, state in enumerate(states, start=1):
@@ -682,6 +692,8 @@ def _sar_metrics(row):
     vv_anterior = extract(r"VV anterior:\s*([-+]?\d+(?:[.,]\d+)?)\s*dB")
     delta = extract(r"ΔVV:\s*([-+]?\d+(?:[.,]\d+)?)\s*dB")
     comparison = extract(r"Comparación:\s*([^.]+)")
+    if comparison not in ("—", ""):
+        comparison = comparison[:1].upper() + comparison[1:]
     s1_date = _fmt(row["ultima_pasada_S1"]) if "ultima_pasada_S1" in row.index else "—"
 
     return {
@@ -1237,10 +1249,10 @@ def build_pdf(df, gdf, raster, logo_bytes):
                 Image(
                     ndre_img,
                     width=175 * mm,
-                    height=105 * mm
+                    height=108 * mm
                 )
             )
-            story.append(Spacer(1, 3 * mm))
+            story.append(Spacer(1, 2.5 * mm))
             story.append(
                 Paragraph(
                     "Evidencia óptica relacionada con Agua Vegetal · NDMI",
@@ -1259,7 +1271,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
                 Image(
                     ndmi_img,
                     width=175 * mm,
-                    height=105 * mm
+                    height=108 * mm
                 )
             )
             story.append(Spacer(1, 1.5 * mm))
@@ -1279,36 +1291,46 @@ def build_pdf(df, gdf, raster, logo_bytes):
     # La tabla comienza en una página independiente.
     story.append(PageBreak())
 
-    state_table = _state_table(df, body, small)
-    if state_table is not None:
-        story.append(
-            Paragraph(
-                "Lotes en seguimiento",
-                ParagraphStyle(
-                    "StateTableTitle",
-                    parent=body,
-                    fontName=FONT_BOLD,
-                    fontSize=11,
-                    leading=13,
-                    textColor=colors.HexColor(GREEN),
-                    spaceAfter=3
+    follow_df = df[df["prioridad"] == "SEGUIMIENTO"].copy()
+    if not follow_df.empty:
+        # Dos páginas más legibles, manteniendo el mismo orden y todas las filas.
+        # Se divide la tabla, no los datos ni los criterios de seguimiento.
+        split_at = (len(follow_df) + 1) // 2
+        follow_pages = [follow_df.iloc[:split_at], follow_df.iloc[split_at:]]
+        state_title_style = ParagraphStyle(
+            "StateTableTitle",
+            parent=body,
+            fontName=FONT_BOLD,
+            fontSize=11,
+            leading=13,
+            textColor=colors.HexColor(GREEN),
+            spaceAfter=3
+        )
+        state_note_style = ParagraphStyle(
+            "StateNote",
+            parent=small,
+            fontSize=7.4,
+            leading=9.5,
+            textColor=colors.HexColor("#5A5F5C")
+        )
+        for page_index, page_df in enumerate(follow_pages, start=1):
+            if page_index > 1:
+                story.append(PageBreak())
+            story.append(
+                Paragraph(
+                    f"Lotes en seguimiento · {page_index}/2",
+                    state_title_style
                 )
             )
-        )
-        story.append(state_table)
-        story.append(Spacer(1, 3 * mm))
-        story.append(
-            Paragraph(
-                "Las flechas muestran la variación temporal de cada índice respecto de su referencia anterior (NDMI y NDRE por separado). La cantidad de escenas y el período de referencia pueden variar entre índices y se conservan en el CSV. Un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
-                ParagraphStyle(
-                    "StateNote",
-                    parent=small,
-                    fontSize=7.2,
-                    leading=9,
-                    textColor=colors.HexColor("#5A5F5C")
+            story.append(_state_table(df, body, small, follow_df=page_df))
+            if page_index == 2:
+                story.append(Spacer(1, 3 * mm))
+                story.append(
+                    Paragraph(
+                        "Las flechas muestran la variación temporal de cada índice respecto de su referencia anterior (NDMI y NDRE por separado). La cantidad de escenas y el período de referencia pueden variar entre índices y se conservan en el CSV. Un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
+                        state_note_style
+                    )
                 )
-            )
-        )
 
     story.append(PageBreak())
 
