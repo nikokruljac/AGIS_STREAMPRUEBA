@@ -717,8 +717,8 @@ def _state_table(df, body, small, follow_df=None):
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#E0E4E1")),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 5.0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5.0),
+        ("TOPPADDING", (0, 0), (-1, -1), 3.6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3.6),
     ]
 
     for r, state in enumerate(states, start=1):
@@ -1360,10 +1360,10 @@ def build_pdf(df, gdf, raster, logo_bytes):
 
     follow_df = df[df["prioridad"] == "SEGUIMIENTO"].copy()
     if not follow_df.empty:
-        # Dos páginas más legibles, manteniendo el mismo orden y todas las filas.
-        # Se divide la tabla, no los datos ni los criterios de seguimiento.
-        split_at = (len(follow_df) + 1) // 2
-        follow_pages = [follow_df.iloc[:split_at], follow_df.iloc[split_at:]]
+        # Una sola tabla continua: ReportLab distribuye las filas según el
+        # espacio real disponible en cada página y repite el encabezado.
+        # Evita dividir previamente en mitades, lo que generaba páginas
+        # casi vacías cuando cada mitad necesitaba a su vez más de una hoja.
         state_title_style = ParagraphStyle(
             "StateTableTitle",
             parent=body,
@@ -1371,7 +1371,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
             fontSize=11,
             leading=13,
             textColor=colors.HexColor(GREEN),
-            spaceAfter=3
+            spaceAfter=4
         )
         state_note_style = ParagraphStyle(
             "StateNote",
@@ -1380,24 +1380,21 @@ def build_pdf(df, gdf, raster, logo_bytes):
             leading=9.5,
             textColor=colors.HexColor("#5A5F5C")
         )
-        for page_index, page_df in enumerate(follow_pages, start=1):
-            if page_index > 1:
-                story.append(PageBreak())
-            story.append(
-                Paragraph(
-                    f"Lotes en seguimiento · {page_index}/2",
-                    state_title_style
-                )
+
+        story.append(
+            Paragraph(
+                "Lotes en seguimiento",
+                state_title_style
             )
-            story.append(_state_table(df, body, small, follow_df=page_df))
-            if page_index == 2:
-                story.append(Spacer(1, 3 * mm))
-                story.append(
-                    Paragraph(
-                        "Debajo de cada variación se indica el período de referencia y la cantidad de observaciones utilizadas para ese índice. NDMI y NDRE se comparan por separado; un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
-                        state_note_style
-                    )
-                )
+        )
+        story.append(_state_table(df, body, small, follow_df=follow_df))
+        story.append(Spacer(1, 3 * mm))
+        story.append(
+            Paragraph(
+                "Debajo de cada variación se indica el período de referencia y la cantidad de observaciones utilizadas para ese índice. NDMI y NDRE se comparan por separado; un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
+                state_note_style
+            )
+        )
 
     story.append(PageBreak())
 
