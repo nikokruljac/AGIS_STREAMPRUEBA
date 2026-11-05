@@ -441,17 +441,30 @@ def _interpretation_sections(row, radar_only=False):
     ndmi_label = _state_signal(row, "senal_relativa_NDMI", "ndmi")
     ndre_label = _state_signal(row, "senal_relativa_NDRE", "ndre")
 
+    has_inconclusive = (
+        "NO CONCLUYENTE" in ndmi_label.upper()
+        or "NO CONCLUYENTE" in ndre_label.upper()
+        or "NO_INFORMADA" in ndmi
+        or "NO_INFORMADA" in ndre
+    )
+
     if conv in ("true", "1", "sí", "si", "yes"):
         relation = (
             f"Hay convergencia: NDMI ({ndmi_label.lower()}) y NDRE "
             f"({ndre_label.lower()}) presentan una respuesta relativa coincidente. "
             "Esto refuerza la consistencia de la señal, pero no identifica por sí solo su causa."
         )
+    elif conv in ("false", "0", "no") and has_inconclusive:
+        relation = (
+            f"La convergencia no está confirmada: la evidencia disponible para NDMI "
+            f"({ndmi_label.lower()}) y NDRE ({ndre_label.lower()}) no permite establecer "
+            "una respuesta coincidente entre ambos indicadores."
+        )
     elif conv in ("false", "0", "no"):
         relation = (
-            f"No hay convergencia entre los indicadores: NDMI ({ndmi_label.lower()}) "
-            f"y NDRE ({ndre_label.lower()}) no muestran una respuesta coincidente. "
-            "La señal debe leerse de manera diferenciada, sin asumir un efecto común."
+            f"Las señales presentan respuestas relativas diferentes: NDMI ({ndmi_label.lower()}) "
+            f"y NDRE ({ndre_label.lower()}). La divergencia debe interpretarse en su contexto, "
+            "sin asumir por sí sola una causa agronómica."
         )
     else:
         relation = (
@@ -1618,10 +1631,26 @@ def build_pdf(df, gdf, raster, logo_bytes):
             consistency_bg = "#F0F6F2"
             consistency_color = GREEN
         elif raw_conv in ("false", "0", "no"):
-            consistency_title = "Las señales no coinciden"
-            consistency_note = "NDMI y NDRE no apuntan en la misma dirección."
-            consistency_bg = "#FFFBE6"
-            consistency_color = "#8A7600"
+            ndmi_state = str(row.get("senal_relativa_NDMI", "")).strip().upper()
+            ndre_state = str(row.get("senal_relativa_NDRE", "")).strip().upper()
+            has_inconclusive = (
+                "NO CONCLUYENTE" in ndmi_state
+                or "NO_CONCLUYENTE" in ndmi_state
+                or "NO CONCLUYENTE" in ndre_state
+                or "NO_CONCLUYENTE" in ndre_state
+                or not ndmi_state
+                or not ndre_state
+            )
+            if has_inconclusive:
+                consistency_title = "Convergencia no confirmada"
+                consistency_note = "La evidencia no permite establecer una respuesta coincidente."
+                consistency_bg = "#F1F3F5"
+                consistency_color = CHARCOAL
+            else:
+                consistency_title = "Las señales divergen"
+                consistency_note = "NDMI y NDRE muestran respuestas relativas diferentes."
+                consistency_bg = "#FFFBE6"
+                consistency_color = "#8A7600"
         else:
             consistency_title = "Sin conclusión"
             consistency_note = "No hay evidencia suficiente para compararlas."
