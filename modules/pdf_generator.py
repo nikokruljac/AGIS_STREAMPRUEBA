@@ -556,27 +556,81 @@ def _interpretation_table(row, body, small, radar_only=False):
     table.setStyle(TableStyle(style))
     return table
 
+def _format_reference_date(value):
+    """Fecha compacta DD/MM, conservando el año cuando cambia."""
+    if value is None or pd.isna(value):
+        return None
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return str(value)
+    return parsed.strftime("%d/%m")
+
+
 def _temporal_trend_cell(row, index_name, trend_cell_style):
-    """Muestra solo la variación temporal, sin fechas ni metadatos secundarios."""
+    """
+    Presenta la variación y la trazabilidad de la referencia temporal
+    usando exclusivamente las columnas ya exportadas por AGIS.
+    """
     suffix = index_name.upper()
     delta_field = f"delta_{index_name.lower()}"
     state_field = f"estado_comparacion_{suffix}"
-    state = str(row[state_field]).strip().upper() if state_field in row.index and pd.notna(row[state_field]) else ""
+    start_field = f"fecha_referencia_inicio_{suffix}"
+    end_field = f"fecha_referencia_fin_{suffix}"
+    count_field = f"observaciones_referencia_{suffix}_temporal"
+
+    state = (
+        str(row[state_field]).strip().upper()
+        if state_field in row.index and pd.notna(row[state_field])
+        else ""
+    )
     value = row[delta_field] if delta_field in row.index else None
+
     if state.startswith("NO_") or value is None or pd.isna(value):
-        label = "Sin dato óptico" if _is_radar_only(row) else "Sin dato"
-        return Paragraph(f"<font color='#777F7A'><b>— {label}</b></font>", trend_cell_style)
+        label = "Sin dato óptico" if _is_radar_only(row) else "Sin comparación"
+        return Paragraph(
+            f"<font color='#777F7A'><b>— {label}</b></font>",
+            trend_cell_style
+        )
+
     try:
         delta = float(value)
     except (TypeError, ValueError):
         return Paragraph("<font color='#777F7A'><b>—</b></font>", trend_cell_style)
+
     if delta > 0:
         arrow, color_hex = "↑", "#25834A"
     elif delta < 0:
         arrow, color_hex = "↓", "#C43D42"
     else:
         arrow, color_hex = "→", "#626A66"
-    return Paragraph(f"<font color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>", trend_cell_style)
+
+    start = row[start_field] if start_field in row.index else None
+    end = row[end_field] if end_field in row.index else None
+    count = row[count_field] if count_field in row.index else None
+    start_txt = _format_reference_date(start)
+    end_txt = _format_reference_date(end)
+
+    if start_txt and end_txt:
+        # El año se agrega si la referencia cruza de año.
+        start_dt = pd.to_datetime(start, errors="coerce")
+        end_dt = pd.to_datetime(end, errors="coerce")
+        if pd.notna(start_dt) and pd.notna(end_dt) and start_dt.year != end_dt.year:
+            period = f"{start_dt.strftime('%d/%m/%y')}–{end_dt.strftime('%d/%m/%y')}"
+        else:
+            period = f"{start_txt}–{end_txt}"
+        try:
+            count_txt = f"{int(float(count))} obs." if pd.notna(count) else "obs. s/d"
+        except (TypeError, ValueError):
+            count_txt = "obs. s/d"
+        detail = f"{period} · {count_txt}"
+    else:
+        detail = "Referencia no disponible"
+
+    return Paragraph(
+        f"<font color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>"
+        f"<br/><font size='6.5' color='#626A66'>{detail}</font>",
+        trend_cell_style
+    )
 
 
 def _state_table(df, body, small, follow_df=None):
@@ -599,15 +653,15 @@ def _state_table(df, body, small, follow_df=None):
     state_cell_style = ParagraphStyle(
         "AGIS_StateTableCell",
         parent=small,
-        fontSize=8.8,
-        leading=10.2,
+        fontSize=9.2,
+        leading=11.0,
     )
 
     trend_cell_style = ParagraphStyle(
         "AGIS_TemporalTrendCell",
         parent=small,
-        fontSize=8.9,
-        leading=10.2,
+        fontSize=9.1,
+        leading=11.0,
         spaceAfter=0,
     )
 
@@ -650,8 +704,8 @@ def _state_table(df, body, small, follow_df=None):
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#E0E4E1")),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 3.0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3.0),
+        ("TOPPADDING", (0, 0), (-1, -1), 5.0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5.0),
     ]
 
     for r, state in enumerate(states, start=1):
@@ -1327,7 +1381,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
                 story.append(Spacer(1, 3 * mm))
                 story.append(
                     Paragraph(
-                        "Las flechas muestran la variación temporal de cada índice respecto de su referencia anterior (NDMI y NDRE por separado). La cantidad de escenas y el período de referencia pueden variar entre índices y se conservan en el CSV. Un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
+                        "Debajo de cada variación se indica el período de referencia y la cantidad de observaciones utilizadas para ese índice. NDMI y NDRE se comparan por separado; un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
                         state_note_style
                     )
                 )
