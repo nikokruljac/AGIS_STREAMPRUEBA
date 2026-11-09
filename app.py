@@ -1,5 +1,7 @@
+
 import re
 import streamlit as st
+from datetime import datetime
 
 from modules.readers import read_csv, read_geojson, read_raster
 from modules.validation import (
@@ -87,11 +89,16 @@ try:
         from shapely.geometry import box
         raster_box = box(rb.left, rb.bottom, rb.right, rb.top)
         spatial_hits = int(gdf_raster_crs.geometry.intersects(raster_box).sum())
+
         if spatial_hits == 0:
             st.error("El GeoJSON y el TIFF no se superponen espacialmente. Revisá que pertenezcan al mismo establecimiento y ejecución.")
             st.stop()
+
         if spatial_hits < len(gdf_raster_crs):
-            st.warning(f"El raster intersecta {spatial_hits} de {len(gdf_raster_crs)} geometrías. Algunos lotes podrían no tener mapa raster.")
+            st.warning(
+                f"El raster intersecta {spatial_hits} de {len(gdf_raster_crs)} geometrías. "
+                "Algunos lotes podrían no tener mapa raster."
+            )
 
     s = summary(df)
     c1, c2, c3, c4 = st.columns(4)
@@ -103,22 +110,59 @@ try:
     if s["sin_clasificar"]:
         st.warning(f"Hay {s['sin_clasificar']} registros sin prioridad reconocida.")
 
-    st.success(f"Archivos validados: {len(df)} registros CSV, {len(gdf)} geometrías y {raster['data'].shape[0]} bandas raster.")
+    st.success(
+        f"Archivos validados: {len(df)} registros CSV, "
+        f"{len(gdf)} geometrías y {raster['data'].shape[0]} bandas raster."
+    )
 
     st.markdown("### Vista previa")
-    preview_cols = [c for c in ["id_unico", "lote", "cultivo", "prioridad", "ndre", "ndmi", "convergencia"] if c in df.columns]
-    st.dataframe(df[preview_cols].head(20), use_container_width=True, hide_index=True)
+    preview_cols = [
+        c for c in [
+            "id_unico", "lote", "cultivo", "prioridad",
+            "ndre", "ndmi", "convergencia"
+        ] if c in df.columns
+    ]
+    st.dataframe(
+        df[preview_cols].head(20),
+        use_container_width=True,
+        hide_index=True
+    )
 
     if st.button("GENERAR PDF AGIS", type="primary"):
         try:
             with st.spinner("Generando informe..."):
                 pdf = build_pdf(df, gdf, raster, None)
-            cliente = df["cliente"].dropna().astype(str).iloc[0] if "cliente" in df.columns and not df["cliente"].dropna().empty else "CLIENTE"
-            nombre_pdf = f"AGIS_INFORME_MONITOREO_{cliente_para_archivo(cliente)}.pdf"
+
+            cliente = (
+                df["cliente"].dropna().astype(str).iloc[0]
+                if "cliente" in df.columns and not df["cliente"].dropna().empty
+                else "CLIENTE"
+            )
+
+            fecha_hora = datetime.now().strftime("%Y-%m-%d_%H-%M")
+            nombre_pdf = (
+                f"AGIS_INFORME_MONITOREO_"
+                f"{cliente_para_archivo(cliente)}_"
+                f"{fecha_hora}.pdf"
+            )
+
             st.success("Informe generado.")
-            st.download_button("DESCARGAR PDF", data=pdf.getvalue(), file_name=nombre_pdf, mime="application/pdf")
+
+            st.download_button(
+                "DESCARGAR PDF",
+                data=pdf.getvalue(),
+                file_name=nombre_pdf,
+                mime="application/pdf"
+            )
+
         except Exception as exc:
-            st.error(f"No se pudo generar el PDF: {type(exc).__name__}: {exc}")
+            st.error(
+                f"No se pudo generar el PDF: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
 except Exception as exc:
-    st.error(f"No se pudo procesar el conjunto de archivos: {type(exc).__name__}: {exc}")
+    st.error(
+        f"No se pudo procesar el conjunto de archivos: "
+        f"{type(exc).__name__}: {exc}"
+    )
