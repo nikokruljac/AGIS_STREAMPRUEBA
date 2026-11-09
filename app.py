@@ -143,7 +143,7 @@ try:
             nombre_pdf = (
                 f"AGIS_INFORME_MONITOREO_"
                 f"{cliente_para_archivo(cliente)}_"
-                f"{fecha_hora}.pdf"
+                f"{fecha}.pdf"
             )
 
             st.success("Informe generado.")
