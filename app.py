@@ -139,11 +139,11 @@ try:
                 else "CLIENTE"
             )
 
-            fecha_hora = datetime.now().strftime("%Y-%m-%d_%H-%M")
+            fecha_reporte = datetime.now().strftime("%Y-%m-%d")
             nombre_pdf = (
                 f"AGIS_INFORME_MONITOREO_"
                 f"{cliente_para_archivo(cliente)}_"
-                f"{fecha}.pdf"
+                f"{fecha_reporte}.pdf"
             )
 
             st.success("Informe generado.")
