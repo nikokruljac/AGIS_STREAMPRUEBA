@@ -627,46 +627,21 @@ def _temporal_trend_cell(row, index_name, trend_cell_style):
     else:
         arrow, color_hex = "→", "#626A66"
 
-    start = row[start_field] if start_field in row.index else None
-    end = row[end_field] if end_field in row.index else None
-    count = row[count_field] if count_field in row.index else None
-    start_txt = _format_reference_date(start)
-    end_txt = _format_reference_date(end)
-
-    if start_txt and end_txt:
-        start_dt = pd.to_datetime(start, errors="coerce")
-        end_dt = pd.to_datetime(end, errors="coerce")
-        if pd.notna(start_dt) and pd.notna(end_dt) and start_dt.year != end_dt.year:
-            period = f"{start_dt.strftime('%d/%m/%y')}–{end_dt.strftime('%d/%m/%y')}"
-        else:
-            period = f"{start_txt}–{end_txt}"
-        try:
-            count_txt = f"{int(float(count))} obs." if pd.notna(count) else "obs. s/d"
-        except (TypeError, ValueError):
-            count_txt = "obs. s/d"
-        detail = f"{period} · {count_txt}"
-    else:
-        detail = "Referencia no disponible"
-
     return Paragraph(
         f"<b>{current_txt}</b>"
         f"<br/><font size='6.5' color='#626A66'>Ref.: {reference_num:.3f}</font>"
-        f"<br/><font color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>"
-        f"<br/><font size='6' color='#626A66'>{detail}</font>",
+        f"<br/><font color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>",
         trend_cell_style
     )
 
 
 def _priority_comparison_cell(row, index_name, body):
-    """Indicador de ficha: actual, promedio de referencia y diferencia."""
+    """Indicador de ficha: índice, valor actual, referencia y diferencia."""
     suffix = index_name.upper()
     current_field = index_name.lower()
     reference_field = f"{index_name.lower()}_anterior"
     delta_field = f"delta_{index_name.lower()}"
     state_field = f"estado_comparacion_{suffix}"
-    start_field = f"fecha_referencia_inicio_{suffix}"
-    end_field = f"fecha_referencia_fin_{suffix}"
-    count_field = f"observaciones_referencia_{suffix}_temporal"
 
     current = row[current_field] if current_field in row.index else None
     reference = row[reference_field] if reference_field in row.index else None
@@ -677,10 +652,12 @@ def _priority_comparison_cell(row, index_name, body):
         else ""
     )
 
+    index_label = "NDRE · Clorofila" if index_name.lower() == "ndre" else "NDMI · Agua vegetal"
     current_txt = _fmt2(current)
+
     lines = [
-        f"<font size='7.5' color='#626A66'>VALOR ACTUAL</font>",
-        f"<font size='15'><b>{current_txt}</b></font>",
+        f"<font size='8' color='#33503F'><b>{index_label}</b></font>",
+        f"<font size='14'><b>{current_txt}</b></font>",
     ]
 
     valid_comparison = (
@@ -701,25 +678,11 @@ def _priority_comparison_cell(row, index_name, body):
                 arrow, color_hex = "→", "#626A66"
 
             lines.append(
-                f"<font size='7' color='#626A66'>Promedio de referencia: {reference_num:.3f}</font>"
+                f"<font size='7' color='#626A66'>Ref.: {reference_num:.3f}</font>"
             )
             lines.append(
-                f"<font color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>"
+                f"<font size='8' color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>"
             )
-
-            start = row[start_field] if start_field in row.index else None
-            end = row[end_field] if end_field in row.index else None
-            count = row[count_field] if count_field in row.index else None
-            start_txt = _format_reference_date(start)
-            end_txt = _format_reference_date(end)
-            if start_txt and end_txt:
-                try:
-                    count_txt = f"{int(float(count))} obs." if pd.notna(count) else "obs. s/d"
-                except (TypeError, ValueError):
-                    count_txt = "obs. s/d"
-                lines.append(
-                    f"<font size='6.2' color='#626A66'>{start_txt}–{end_txt} · {count_txt}</font>"
-                )
         except (TypeError, ValueError):
             lines.append("<font size='7' color='#777F7A'>Sin comparación</font>")
     else:
@@ -733,8 +696,10 @@ def _priority_comparison_cell(row, index_name, body):
             parent=body,
             fontName=FONT_REGULAR,
             fontSize=8,
-            leading=10,
+            leading=11,
             textColor=colors.HexColor(CHARCOAL),
+            spaceBefore=0,
+            spaceAfter=0,
         )
     )
 
@@ -1484,7 +1449,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
         story.append(Spacer(1, 3 * mm))
         story.append(
             Paragraph(
-                 "En cada indicador se muestra el valor actual, el promedio del período de referencia, la diferencia y la cantidad de observaciones utilizadas. NDMI y NDRE se comparan por separado; un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
+                 "En cada indicador se muestra el valor actual, el promedio del período de referencia y su diferencia. NDMI y NDRE se comparan por separado; un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
                 state_note_style
             )
         )
