@@ -581,34 +581,44 @@ def _format_reference_date(value):
 
 def _temporal_trend_cell(row, index_name, trend_cell_style):
     """
-    Presenta la variación y la trazabilidad de la referencia temporal
-    usando exclusivamente las columnas ya exportadas por AGIS.
+    Presenta valor actual, promedio de referencia y diferencia temporal.
+    Utiliza exclusivamente los campos ya exportados por AGIS.
     """
     suffix = index_name.upper()
+    current_field = index_name.lower()
+    reference_field = f"{index_name.lower()}_anterior"
     delta_field = f"delta_{index_name.lower()}"
     state_field = f"estado_comparacion_{suffix}"
     start_field = f"fecha_referencia_inicio_{suffix}"
     end_field = f"fecha_referencia_fin_{suffix}"
     count_field = f"observaciones_referencia_{suffix}_temporal"
 
+    current = row[current_field] if current_field in row.index else None
+    reference = row[reference_field] if reference_field in row.index else None
+    delta_value = row[delta_field] if delta_field in row.index else None
     state = (
         str(row[state_field]).strip().upper()
         if state_field in row.index and pd.notna(row[state_field])
         else ""
     )
-    value = row[delta_field] if delta_field in row.index else None
 
-    if state.startswith("NO_") or value is None or pd.isna(value):
+    current_txt = _fmt2(current)
+    if state.startswith("NO_") or reference is None or pd.isna(reference) or delta_value is None or pd.isna(delta_value):
         label = "Sin dato óptico" if _is_radar_only(row) else "Sin comparación"
         return Paragraph(
-            f"<font color='#777F7A'><b>— {label}</b></font>",
+            f"<b>{current_txt}</b><br/>"
+            f"<font size='6.5' color='#777F7A'>{label}</font>",
             trend_cell_style
         )
 
     try:
-        delta = float(value)
+        reference_num = float(reference)
+        delta = float(delta_value)
     except (TypeError, ValueError):
-        return Paragraph("<font color='#777F7A'><b>—</b></font>", trend_cell_style)
+        return Paragraph(
+            f"<b>{current_txt}</b><br/><font size='6.5' color='#777F7A'>Sin comparación</font>",
+            trend_cell_style
+        )
 
     if delta > 0:
         arrow, color_hex = "↑", "#25834A"
@@ -624,7 +634,6 @@ def _temporal_trend_cell(row, index_name, trend_cell_style):
     end_txt = _format_reference_date(end)
 
     if start_txt and end_txt:
-        # El año se agrega si la referencia cruza de año.
         start_dt = pd.to_datetime(start, errors="coerce")
         end_dt = pd.to_datetime(end, errors="coerce")
         if pd.notna(start_dt) and pd.notna(end_dt) and start_dt.year != end_dt.year:
@@ -640,9 +649,93 @@ def _temporal_trend_cell(row, index_name, trend_cell_style):
         detail = "Referencia no disponible"
 
     return Paragraph(
-        f"<font color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>"
-        f"<br/><font size='6.5' color='#626A66'>{detail}</font>",
+        f"<b>{current_txt}</b>"
+        f"<br/><font size='6.5' color='#626A66'>Ref.: {reference_num:.3f}</font>"
+        f"<br/><font color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>"
+        f"<br/><font size='6' color='#626A66'>{detail}</font>",
         trend_cell_style
+    )
+
+
+def _priority_comparison_cell(row, index_name, body):
+    """Indicador de ficha: actual, promedio de referencia y diferencia."""
+    suffix = index_name.upper()
+    current_field = index_name.lower()
+    reference_field = f"{index_name.lower()}_anterior"
+    delta_field = f"delta_{index_name.lower()}"
+    state_field = f"estado_comparacion_{suffix}"
+    start_field = f"fecha_referencia_inicio_{suffix}"
+    end_field = f"fecha_referencia_fin_{suffix}"
+    count_field = f"observaciones_referencia_{suffix}_temporal"
+
+    current = row[current_field] if current_field in row.index else None
+    reference = row[reference_field] if reference_field in row.index else None
+    delta_value = row[delta_field] if delta_field in row.index else None
+    state = (
+        str(row[state_field]).strip().upper()
+        if state_field in row.index and pd.notna(row[state_field])
+        else ""
+    )
+
+    current_txt = _fmt2(current)
+    lines = [
+        f"<font size='7.5' color='#626A66'>VALOR ACTUAL</font>",
+        f"<font size='15'><b>{current_txt}</b></font>",
+    ]
+
+    valid_comparison = (
+        not state.startswith("NO_")
+        and reference is not None and not pd.isna(reference)
+        and delta_value is not None and not pd.isna(delta_value)
+    )
+
+    if valid_comparison:
+        try:
+            reference_num = float(reference)
+            delta = float(delta_value)
+            if delta > 0:
+                arrow, color_hex = "↑", "#25834A"
+            elif delta < 0:
+                arrow, color_hex = "↓", "#C43D42"
+            else:
+                arrow, color_hex = "→", "#626A66"
+
+            lines.append(
+                f"<font size='7' color='#626A66'>Promedio de referencia: {reference_num:.3f}</font>"
+            )
+            lines.append(
+                f"<font color='{color_hex}'><b>{arrow} {delta:+.3f}</b></font>"
+            )
+
+            start = row[start_field] if start_field in row.index else None
+            end = row[end_field] if end_field in row.index else None
+            count = row[count_field] if count_field in row.index else None
+            start_txt = _format_reference_date(start)
+            end_txt = _format_reference_date(end)
+            if start_txt and end_txt:
+                try:
+                    count_txt = f"{int(float(count))} obs." if pd.notna(count) else "obs. s/d"
+                except (TypeError, ValueError):
+                    count_txt = "obs. s/d"
+                lines.append(
+                    f"<font size='6.2' color='#626A66'>{start_txt}–{end_txt} · {count_txt}</font>"
+                )
+        except (TypeError, ValueError):
+            lines.append("<font size='7' color='#777F7A'>Sin comparación</font>")
+    else:
+        label = "Sin dato óptico" if _is_radar_only(row) else "Sin comparación"
+        lines.append(f"<font size='7' color='#777F7A'>{label}</font>")
+
+    return Paragraph(
+        "<br/>".join(lines),
+        ParagraphStyle(
+            f"PriorityComparison_{index_name}",
+            parent=body,
+            fontName=FONT_REGULAR,
+            fontSize=8,
+            leading=10,
+            textColor=colors.HexColor(CHARCOAL),
+        )
     )
 
 
@@ -682,8 +775,8 @@ def _state_table(df, body, small, follow_df=None):
         Paragraph("ESTABLECIMIENTO", header_style),
         Paragraph("LOTE", header_style),
         Paragraph("MODALIDAD", header_style),
-        Paragraph("AGUA VEGETAL<br/>NDMI · EVOLUCIÓN", header_style),
-        Paragraph("CLOROFILA<br/>NDRE · EVOLUCIÓN", header_style),
+        Paragraph("AGUA VEGETAL<br/>NDMI · ACTUAL / REF. / DIF.", header_style),
+        Paragraph("CLOROFILA<br/>NDRE · ACTUAL / REF. / DIF.", header_style),
         Paragraph("ESTADO GENERAL", header_style),
     ]]
     states = []
@@ -1391,7 +1484,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
         story.append(Spacer(1, 3 * mm))
         story.append(
             Paragraph(
-                "Debajo de cada variación se indica el período de referencia y la cantidad de observaciones utilizadas para ese índice. NDMI y NDRE se comparan por separado; un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
+                 "En cada indicador se muestra el valor actual, el promedio del período de referencia, la diferencia y la cantidad de observaciones utilizadas. NDMI y NDRE se comparan por separado; un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
                 state_note_style
             )
         )
@@ -1611,13 +1704,6 @@ def build_pdf(df, gdf, raster, logo_bytes):
         # -----------------------------------------------------
         # INDICADORES — versión simple
         # -----------------------------------------------------
-        ndre = _fmt2(row["ndre"]) if "ndre" in row.index else "—"
-        ndmi = _fmt2(row["ndmi"]) if "ndmi" in row.index else "—"
-        sar = _fmt(row["SAR_disponible"]) if "SAR_disponible" in row.index else "—"
-
-        ndmi_rel = _fmt(row["senal_relativa_NDMI"]) if "senal_relativa_NDMI" in row.index else "—"
-        ndre_rel = _fmt(row["senal_relativa_NDRE"]) if "senal_relativa_NDRE" in row.index else "—"
-
         raw_conv = str(
             row["convergencia"] if "convergencia" in row.index else "—"
         ).strip().lower()
@@ -1655,16 +1741,8 @@ def build_pdf(df, gdf, raster, logo_bytes):
             consistency_color = CHARCOAL
 
         indicator_cells = [
-            _stacked_metric_cell(
-                "NDRE", ndre,
-                ndre_rel.replace("_", " ").title(),
-                value_size=16, title_size=8.5, note_size=7.5
-            ),
-            _stacked_metric_cell(
-                "NDMI", ndmi,
-                ndmi_rel.replace("_", " ").title(),
-                value_size=16, title_size=8.5, note_size=7.5
-            ),
+            _priority_comparison_cell(row, "ndre", body),
+            _priority_comparison_cell(row, "ndmi", body),
             _stacked_metric_cell(
                 "Consistencia", consistency_title,
                 consistency_note,
