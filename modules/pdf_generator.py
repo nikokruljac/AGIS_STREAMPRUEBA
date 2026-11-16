@@ -927,6 +927,12 @@ def build_pdf(df, gdf, raster, logo_bytes):
 
     latest_s2 = _latest_s2_date(df)
     latest_s1 = _latest_s1_date(df)
+
+    # Activación excepcional: solo cuando TODOS los lotes son exclusivamente SAR.
+    # No modifica modalidades, prioridades ni cálculos generados por AGIS.
+    radar_lot_count = int(df.apply(_is_radar_only, axis=1).sum()) if not df.empty else 0
+    all_sar_mode = bool(not df.empty and radar_lot_count == len(df))
+
     report_date = date.today().strftime("%d/%m/%Y")
     doc._agis_pdf_title = f"AGIS - Informe de monitoreo - {client_name} - {report_date}"
 
@@ -1062,6 +1068,35 @@ def build_pdf(df, gdf, raster, logo_bytes):
                 body
             )
         )
+
+    if all_sar_mode:
+        sar_notice = RoundedTable(
+            [[Paragraph(
+                f"<b>MODALIDAD DE MONITOREO: 100% RADAR SAR</b><br/>"
+                f"Los {radar_lot_count} lotes fueron monitoreados mediante radar Sentinel-1. "
+                "Durante el período no hubo evidencia óptica válida suficiente para el seguimiento.",
+                ParagraphStyle(
+                    "AllSARCoverNotice",
+                    parent=body,
+                    fontName=FONT_REGULAR,
+                    fontSize=9,
+                    leading=12,
+                    textColor=colors.white,
+                )
+            )]],
+            colWidths=[175 * mm],
+            radius=7,
+            panel_fill=colors.HexColor("#343836"),
+            panel_stroke=colors.HexColor("#343836"),
+        )
+        sar_notice.setStyle(TableStyle([
+            ("LEFTPADDING", (0, 0), (-1, -1), 9),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ]))
+        story.append(sar_notice)
+        story.append(Spacer(1, 3 * mm))
 
     story.append(
         Spacer(1, 8 * mm)
@@ -1319,142 +1354,144 @@ def build_pdf(df, gdf, raster, logo_bytes):
         PageBreak()
     )
 
-    # ---------------------------------------------------------
-    # ESTADO GENERAL DEL CULTIVO
-    # ---------------------------------------------------------
+    if not all_sar_mode:
+        # ---------------------------------------------------------
+        # ESTADO GENERAL DEL CULTIVO
+        # ---------------------------------------------------------
 
-    story.append(
-        Paragraph(
-            "2. Estado general del cultivo",
-            h2
-        )
-    )
-
-    story.append(
-        Paragraph(
-            "Esta sección acompaña el seguimiento de campaña. Resume el comportamiento relativo observado en los lotes que no requieren una ficha de alerta, sin convertir los indicadores en diagnósticos agronómicos.",
-            body
-        )
-    )
-    story.append(Spacer(1, 4 * mm))
-
-    if raster is not None and getattr(raster, "get", lambda *_: None)("data") is not None and raster["data"].shape[0] >= 3:
-        ndre_img = raster_map(
-            raster,
-            2,
-            gdf=gdf,
-            title=""
-        )
-        ndmi_img = raster_map(
-            raster,
-            3,
-            gdf=gdf,
-            title=""
-        )
-
-        if ndre_img and ndmi_img:
-            # Los mapas de estado general ocupan una página propia.
-            # Se muestran uno debajo del otro para que NDRE y NDMI
-            # puedan apreciarse correctamente y no compitan con la tabla.
-            story.append(
-                Paragraph(
-                    "Evidencia óptica relacionada con Clorofila · NDRE",
-                    ParagraphStyle(
-                        "StateMapTitleNDRE",
-                        parent=body,
-                        fontName=FONT_BOLD,
-                        fontSize=10,
-                        leading=12,
-                        textColor=colors.HexColor(GREEN),
-                        spaceAfter=2
-                    )
-                )
+        story.append(
+            Paragraph(
+                "2. Estado general del cultivo",
+                h2
             )
-            story.append(
-                Image(
-                    ndre_img,
-                    width=175 * mm,
-                    height=108 * mm
-                )
-            )
-            story.append(Spacer(1, 2.5 * mm))
-            story.append(
-                Paragraph(
-                    "Evidencia óptica relacionada con Agua Vegetal · NDMI",
-                    ParagraphStyle(
-                        "StateMapTitleNDMI",
-                        parent=body,
-                        fontName=FONT_BOLD,
-                        fontSize=10,
-                        leading=12,
-                        textColor=colors.HexColor(GREEN),
-                        spaceAfter=2
-                    )
-                )
-            )
-            story.append(
-                Image(
-                    ndmi_img,
-                    width=175 * mm,
-                    height=108 * mm
-                )
-            )
-            story.append(Spacer(1, 1.5 * mm))
-            story.append(
-                Paragraph(
-                    "Las escalas representan valores de los índices. Su lectura debe considerar el cultivo, el momento fenológico y la comparación entre lotes; los colores no constituyen por sí solos un diagnóstico agronómico.",
-                    ParagraphStyle(
-                        "IndexMapReadingNoteV4",
-                        parent=small,
-                        fontSize=7.4,
-                        leading=9,
-                        textColor=colors.HexColor("#5A5F5C")
-                    )
-                )
-            )
-
-    # La tabla comienza en una página independiente.
-    story.append(PageBreak())
-
-    follow_df = df[df["prioridad"] == "SEGUIMIENTO"].copy()
-    if not follow_df.empty:
-        # Una sola tabla continua: ReportLab distribuye las filas según el
-        # espacio real disponible en cada página y repite el encabezado.
-        # Evita dividir previamente en mitades, lo que generaba páginas
-        # casi vacías cuando cada mitad necesitaba a su vez más de una hoja.
-        state_title_style = ParagraphStyle(
-            "StateTableTitle",
-            parent=body,
-            fontName=FONT_BOLD,
-            fontSize=11,
-            leading=13,
-            textColor=colors.HexColor(GREEN),
-            spaceAfter=4
-        )
-        state_note_style = ParagraphStyle(
-            "StateNote",
-            parent=small,
-            fontSize=7.4,
-            leading=9.5,
-            textColor=colors.HexColor("#5A5F5C")
         )
 
         story.append(
             Paragraph(
-                "Lotes en seguimiento",
-                state_title_style
+                "Esta sección acompaña el seguimiento de campaña. Resume el comportamiento relativo observado en los lotes que no requieren una ficha de alerta, sin convertir los indicadores en diagnósticos agronómicos.",
+                body
             )
         )
-        story.append(_state_table(df, body, small, follow_df=follow_df))
-        story.append(Spacer(1, 3 * mm))
-        story.append(
-            Paragraph(
-                 "En cada indicador se muestra el valor actual, el promedio del período de referencia y su diferencia. NDMI y NDRE se comparan por separado; un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
-                state_note_style
-            )
-        )
+        story.append(Spacer(1, 4 * mm))
 
-    story.append(PageBreak())
+        if raster is not None and getattr(raster, "get", lambda *_: None)("data") is not None and raster["data"].shape[0] >= 3:
+            ndre_img = raster_map(
+                raster,
+                2,
+                gdf=gdf,
+                title=""
+            )
+            ndmi_img = raster_map(
+                raster,
+                3,
+                gdf=gdf,
+                title=""
+            )
+
+            if ndre_img and ndmi_img:
+                # Los mapas de estado general ocupan una página propia.
+                # Se muestran uno debajo del otro para que NDRE y NDMI
+                # puedan apreciarse correctamente y no compitan con la tabla.
+                story.append(
+                    Paragraph(
+                        "Evidencia óptica relacionada con Clorofila · NDRE",
+                        ParagraphStyle(
+                            "StateMapTitleNDRE",
+                            parent=body,
+                            fontName=FONT_BOLD,
+                            fontSize=10,
+                            leading=12,
+                            textColor=colors.HexColor(GREEN),
+                            spaceAfter=2
+                        )
+                    )
+                )
+                story.append(
+                    Image(
+                        ndre_img,
+                        width=175 * mm,
+                        height=108 * mm
+                    )
+                )
+                story.append(Spacer(1, 2.5 * mm))
+                story.append(
+                    Paragraph(
+                        "Evidencia óptica relacionada con Agua Vegetal · NDMI",
+                        ParagraphStyle(
+                            "StateMapTitleNDMI",
+                            parent=body,
+                            fontName=FONT_BOLD,
+                            fontSize=10,
+                            leading=12,
+                            textColor=colors.HexColor(GREEN),
+                            spaceAfter=2
+                        )
+                    )
+                )
+                story.append(
+                    Image(
+                        ndmi_img,
+                        width=175 * mm,
+                        height=108 * mm
+                    )
+                )
+                story.append(Spacer(1, 1.5 * mm))
+                story.append(
+                    Paragraph(
+                        "Las escalas representan valores de los índices. Su lectura debe considerar el cultivo, el momento fenológico y la comparación entre lotes; los colores no constituyen por sí solos un diagnóstico agronómico.",
+                        ParagraphStyle(
+                            "IndexMapReadingNoteV4",
+                            parent=small,
+                            fontSize=7.4,
+                            leading=9,
+                            textColor=colors.HexColor("#5A5F5C")
+                        )
+                    )
+                )
+
+        # La tabla comienza en una página independiente.
+        story.append(PageBreak())
+
+        follow_df = df[df["prioridad"] == "SEGUIMIENTO"].copy()
+        if not follow_df.empty:
+            # Una sola tabla continua: ReportLab distribuye las filas según el
+            # espacio real disponible en cada página y repite el encabezado.
+            # Evita dividir previamente en mitades, lo que generaba páginas
+            # casi vacías cuando cada mitad necesitaba a su vez más de una hoja.
+            state_title_style = ParagraphStyle(
+                "StateTableTitle",
+                parent=body,
+                fontName=FONT_BOLD,
+                fontSize=11,
+                leading=13,
+                textColor=colors.HexColor(GREEN),
+                spaceAfter=4
+            )
+            state_note_style = ParagraphStyle(
+                "StateNote",
+                parent=small,
+                fontSize=7.4,
+                leading=9.5,
+                textColor=colors.HexColor("#5A5F5C")
+            )
+
+            story.append(
+                Paragraph(
+                    "Lotes en seguimiento",
+                    state_title_style
+                )
+            )
+            story.append(_state_table(df, body, small, follow_df=follow_df))
+            story.append(Spacer(1, 3 * mm))
+            story.append(
+                Paragraph(
+                     "En cada indicador se muestra el valor actual, el promedio del período de referencia y su diferencia. NDMI y NDRE se comparan por separado; un aumento o una disminución no constituyen por sí solos una mejora, un deterioro ni un diagnóstico agronómico. Los lotes con prioridad alta o media se desarrollan en las fichas de alerta.",
+                    state_note_style
+                )
+            )
+
+    if not all_sar_mode:
+        story.append(PageBreak())
 
     # ---------------------------------------------------------
     # LOTES PRIORITARIOS — FICHAS
@@ -1807,7 +1844,10 @@ def build_pdf(df, gdf, raster, logo_bytes):
     # ---------------------------------------------------------
 
     if not radar_df.empty:
-        story.append(PageBreak())
+        # En modo 100% SAR, el salto de página ya se produjo después del mapa general.
+        # Evitamos un segundo salto consecutivo que generaría una página vacía.
+        if not all_sar_mode:
+            story.append(PageBreak())
         radar_section_number = "4" if not priority_df.empty else "3"
         story.append(
             Paragraph(
