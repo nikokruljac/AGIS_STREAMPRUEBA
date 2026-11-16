@@ -1,4 +1,4 @@
-MIXED_GREEN = "#6F927D"
+# AGIS PDF GENERATOR — ADAPTATIVO SAR V3\n# Basado en V2. Ajustes acotados: lectura direccional de VV y orden natural estable.\n\nMIXED_GREEN = "#6F927D"
 
 from io import BytesIO
 from pathlib import Path
@@ -370,23 +370,38 @@ def _natural_sort_key(value):
 
 
 def _sort_lots_naturally(frame):
-    """Ordena por establecimiento/chacra y luego por número natural de lote."""
+    """
+    Ordena primero por prioridad (si existe), luego por establecimiento
+    y finalmente por identificador de lote en orden natural.
+    Ejemplo: Cuadro-2, Cuadro-9, Cuadro-10.
+    """
     if frame is None or frame.empty:
         return frame
+
     result = frame.copy()
+    sort_columns = []
+
+    # La prioridad debe conservarse como criterio principal.
+    if "_orden_prioridad" in result.columns:
+        sort_columns.append("_orden_prioridad")
+
     if "establecimiento" in result.columns:
         result["_orden_establecimiento"] = result["establecimiento"].map(_natural_sort_key)
     else:
         result["_orden_establecimiento"] = [tuple()] * len(result)
+    sort_columns.append("_orden_establecimiento")
+
     if "lote" in result.columns:
         result["_orden_lote"] = result["lote"].map(_natural_sort_key)
     else:
         result["_orden_lote"] = [tuple()] * len(result)
-    result = result.sort_values(
-        ["_orden_establecimiento", "_orden_lote"],
-        kind="stable"
+    sort_columns.append("_orden_lote")
+
+    result = result.sort_values(sort_columns, kind="stable")
+    return result.drop(
+        columns=["_orden_establecimiento", "_orden_lote"],
+        errors="ignore"
     )
-    return result.drop(columns=["_orden_establecimiento", "_orden_lote"], errors="ignore")
 
 
 def _sar_change_interpretation(radar):
@@ -402,11 +417,13 @@ def _sar_change_interpretation(radar):
             "pero no establecer si aumentó o disminuyó."
         )
 
+    actual_txt = f"{actual:.2f}".replace(".", ",")
+    anterior_txt = f"{anterior:.2f}".replace(".", ",")
     delta_txt = f"{abs(delta):.2f}".replace(".", ",")
     if round(delta, 2) == 0:
         return (
             f"La señal VV se mantiene prácticamente sin variación respecto de la "
-            f"observación anterior ({actual:.2f} dB frente a {anterior:.2f} dB). "
+            f"observación anterior ({actual_txt} dB frente a {anterior_txt} dB). "
             "En esta comparación retorna al sensor una cantidad de energía similar. "
             "Esto describe estabilidad de la respuesta radar, no confirma por sí solo "
             "que la humedad o el estado del cultivo permanezcan sin cambios."
@@ -414,7 +431,7 @@ def _sar_change_interpretation(radar):
     if delta > 0:
         return (
             f"La señal VV aumentó {delta_txt} dB respecto de la observación anterior "
-            f"({anterior:.2f} a {actual:.2f} dB). Esto indica que en la última adquisición "
+            f"({anterior_txt} a {actual_txt} dB). Esto indica que en la última adquisición "
             "regresó más energía radar hacia el sensor. El cambio puede estar relacionado "
             "con variaciones de humedad superficial, rugosidad del suelo o estructura y "
             "disposición de la vegetación. Con VV por sí sola no es posible distinguir "
@@ -422,7 +439,7 @@ def _sar_change_interpretation(radar):
         )
     return (
         f"La señal VV disminuyó {delta_txt} dB respecto de la observación anterior "
-        f"({anterior:.2f} a {actual:.2f} dB). Esto indica que en la última adquisición "
+        f"({anterior_txt} a {actual_txt} dB). Esto indica que en la última adquisición "
         "regresó menos energía radar hacia el sensor. El cambio puede estar relacionado "
         "con variaciones de humedad superficial, rugosidad del suelo o estructura y "
         "disposición de la vegetación. Con VV por sí sola no es posible distinguir "
@@ -882,16 +899,34 @@ def _sar_metrics(row):
             texts.append(str(row[field]))
     text = " ".join(texts)
 
-    def extract(pattern):
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        return match.group(1).replace(",", ".") if match else "—"
+    def extract(patterns):
+        if isinstance(patterns, str):
+            patterns = [patterns]
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).replace(",", ".").strip()
+        return "—"
 
-    vv_actual = extract(r"VV actual:\s*([-+]?\d+(?:[.,]\d+)?)\s*dB")
-    vv_anterior = extract(r"VV anterior:\s*([-+]?\d+(?:[.,]\d+)?)\s*dB")
-    delta = extract(r"ΔVV:\s*([-+]?\d+(?:[.,]\d+)?)\s*dB")
-    comparison = extract(r"Comparación:\s*([^.]+)")
-    if comparison not in ("—", ""):
-        comparison = comparison[:1].upper() + comparison[1:]
+    number = r"([-+]?\d+(?:[.,]\d+)?)"
+    vv_actual = extract([
+        rf"VV\s+actual\s*:\s*{number}\s*dB",
+        rf"actual\s*VV\s*:\s*{number}\s*dB",
+    ])
+    vv_anterior = extract([
+        rf"VV\s+anterior\s*:\s*{number}\s*dB",
+        rf"anterior\s*VV\s*:\s*{number}\s*dB",
+    ])
+    delta = extract([
+        rf"(?:Δ|DELTA|VARIACI[ÓO]N)\s*VV\s*:\s*{number}\s*dB",
+        rf"ΔVV\s*[:=]?\s*{number}\s*dB",
+    ])
+    comparison = extract(r"Comparación\s*:\s*([^.]+)")
+    if delta == "—" and vv_actual != "—" and vv_anterior != "—":
+        try:
+            delta = f"{float(vv_actual) - float(vv_anterior):.2f}"
+        except (TypeError, ValueError):
+            pass
     s1_date = _fmt(row["ultima_pasada_S1"]) if "ultima_pasada_S1" in row.index else "—"
 
     return {
