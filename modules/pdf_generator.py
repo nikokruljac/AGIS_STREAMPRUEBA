@@ -1,4 +1,4 @@
-# AGIS PDF GENERATOR — ADAPTATIVO SAR V3\n# Basado en V2. Ajustes acotados: lectura direccional de VV y orden natural estable.\n\nMIXED_GREEN = "#6F927D"
+# AGIS PDF GENERATOR — ADAPTATIVO SAR V4\n# Basado en V2. Ajustes acotados: lectura direccional de VV y orden natural estable.\n\nMIXED_GREEN = "#6F927D"
 
 from io import BytesIO
 from pathlib import Path
@@ -922,6 +922,16 @@ def _sar_metrics(row):
         rf"ΔVV\s*[:=]?\s*{number}\s*dB",
     ])
     comparison = extract(r"Comparación\s*:\s*([^.]+)")
+
+    # Respaldo: algunas exportaciones incorporan etiquetas con puntuación o
+    # separadores distintos. Se buscan los tres valores en cada campo fuente.
+    if vv_actual == "—":
+        vv_actual = extract([rf"VV\s+actual\s*[:=]?\s*{number}"])
+    if vv_anterior == "—":
+        vv_anterior = extract([rf"VV\s+anterior\s*[:=]?\s*{number}"])
+    if delta == "—":
+        delta = extract([rf"(?:Δ|DELTA|VARIACI[ÓO]N)\s*VV?\s*[:=]?\s*{number}"])
+
     if delta == "—" and vv_actual != "—" and vv_anterior != "—":
         try:
             delta = f"{float(vv_actual) - float(vv_anterior):.2f}"
@@ -952,6 +962,10 @@ def build_pdf(df, gdf, raster, logo_bytes):
         topMargin=12 * mm,
         bottomMargin=15 * mm
     )
+    # Identificador verificable del generador realmente ejecutado.
+    doc.title = "AGIS Informe de Monitoreo — Generador Adaptativo SAR V4"
+    doc.author = "AGIS"
+    doc.subject = "PDF generado con interpretación VV direccional y orden natural de lotes — V4"
 
     styles = getSampleStyleSheet()
 
