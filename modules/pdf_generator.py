@@ -361,6 +361,75 @@ def _is_radar_only(row):
     return _monitoring_mode(row) == "MONITOREO POR RADAR SAR"
 
 
+def _natural_sort_key(value):
+    """Clave natural: ordena identificadores alfanuméricos por sus tramos numéricos."""
+    if value is None or pd.isna(value):
+        value = ""
+    parts = re.split(r"(\d+)", str(value).strip().lower())
+    return tuple((0, int(part)) if part.isdigit() else (1, part) for part in parts if part != "")
+
+
+def _sort_lots_naturally(frame):
+    """Ordena por establecimiento/chacra y luego por número natural de lote."""
+    if frame is None or frame.empty:
+        return frame
+    result = frame.copy()
+    if "establecimiento" in result.columns:
+        result["_orden_establecimiento"] = result["establecimiento"].map(_natural_sort_key)
+    else:
+        result["_orden_establecimiento"] = [tuple()] * len(result)
+    if "lote" in result.columns:
+        result["_orden_lote"] = result["lote"].map(_natural_sort_key)
+    else:
+        result["_orden_lote"] = [tuple()] * len(result)
+    result = result.sort_values(
+        ["_orden_establecimiento", "_orden_lote"],
+        kind="stable"
+    )
+    return result.drop(columns=["_orden_establecimiento", "_orden_lote"], errors="ignore")
+
+
+def _sar_change_interpretation(radar):
+    """Explica el cambio observado en VV sin atribuirlo automáticamente a humedad."""
+    try:
+        actual = float(str(radar.get("vv_actual", "—")).replace(",", "."))
+        anterior = float(str(radar.get("vv_anterior", "—")).replace(",", "."))
+        delta = float(str(radar.get("delta", "—")).replace(",", "."))
+    except (TypeError, ValueError):
+        return (
+            "No hay una comparación VV válida con la observación anterior. "
+            "Por lo tanto, esta ficha permite describir la respuesta radar actual, "
+            "pero no establecer si aumentó o disminuyó."
+        )
+
+    delta_txt = f"{abs(delta):.2f}".replace(".", ",")
+    if round(delta, 2) == 0:
+        return (
+            f"La señal VV se mantiene prácticamente sin variación respecto de la "
+            f"observación anterior ({actual:.2f} dB frente a {anterior:.2f} dB). "
+            "En esta comparación retorna al sensor una cantidad de energía similar. "
+            "Esto describe estabilidad de la respuesta radar, no confirma por sí solo "
+            "que la humedad o el estado del cultivo permanezcan sin cambios."
+        )
+    if delta > 0:
+        return (
+            f"La señal VV aumentó {delta_txt} dB respecto de la observación anterior "
+            f"({anterior:.2f} a {actual:.2f} dB). Esto indica que en la última adquisición "
+            "regresó más energía radar hacia el sensor. El cambio puede estar relacionado "
+            "con variaciones de humedad superficial, rugosidad del suelo o estructura y "
+            "disposición de la vegetación. Con VV por sí sola no es posible distinguir "
+            "entre esas causas ni afirmar que el lote esté más húmedo."
+        )
+    return (
+        f"La señal VV disminuyó {delta_txt} dB respecto de la observación anterior "
+        f"({anterior:.2f} a {actual:.2f} dB). Esto indica que en la última adquisición "
+        "regresó menos energía radar hacia el sensor. El cambio puede estar relacionado "
+        "con variaciones de humedad superficial, rugosidad del suelo o estructura y "
+        "disposición de la vegetación. Con VV por sí sola no es posible distinguir "
+        "entre esas causas ni afirmar que el lote esté más seco."
+    )
+
+
 def _state_signal(row, signal_field, value_field):
     """Presenta el estado calculado por AGIS sin inferir diagnósticos nuevos."""
     signal = (
@@ -421,18 +490,22 @@ def _interpretation_sections(row, radar_only=False):
         )
         if radar["comparison"] not in ("—", ""):
             radar_line += f" Comparación: {radar['comparison']}."
+        change_text = _sar_change_interpretation(radar)
         return [
             (
                 "Evidencia disponible",
                 "No hubo evidencia óptica válida suficiente para este lote durante el período. AGIS mantiene el seguimiento mediante observaciones Sentinel-1 SAR."
             ),
             ("Lectura del radar", radar_line),
+            ("Qué muestra el cambio", change_text),
             (
-                "Interpretación y alcance",
-                "La variación de la señal VV aporta continuidad al monitoreo, pero por sí sola no permite establecer una causa agronómica ni inferir el estado de NDMI o NDRE."
+                "Alcance de la interpretación",
+                "La señal VV describe cómo interactuó el radar con la superficie y la vegetación en cada adquisición. Puede responder a humedad, rugosidad y estructura vegetal; por sí sola no permite separar esos factores ni inferir NDMI o NDRE."
             ),
-            ("Qué conviene verificar", value("que_revisar", "Mantener el seguimiento y contrastar la evolución del cultivo con su contexto fenológico.")),
-            ("Limitaciones", value("limitaciones", "La interpretación se limita a la evidencia radar disponible y a su comparabilidad temporal.")),
+            (
+                "Seguimiento recomendado",
+                "Comparar la próxima adquisición Sentinel-1 con esta observación, procurando mantener la misma geometría y órbita. Si el cambio persiste, podrá evaluarse como una modificación sostenida de la respuesta radar."
+            ),
         ]
 
     ndmi = value("senal_relativa_NDMI", "NO_INFORMADA").upper()
@@ -1517,6 +1590,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
         "_orden_prioridad",
         kind="stable"
     )
+    priority_df = _sort_lots_naturally(priority_df)
 
     radar_df = df[radar_only_mask].copy()
     radar_df["_orden_prioridad"] = (
@@ -1526,6 +1600,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
         "_orden_prioridad",
         kind="stable"
     )
+    radar_df = _sort_lots_naturally(radar_df)
 
     # ---------------------------------------------------------
     # SECCIÓN DE FICHAS DE PRIORIDADES
