@@ -59,7 +59,7 @@ with st.sidebar:
     st.markdown("### Archivos")
     csv_file = st.file_uploader("CSV AGIS", type=["csv"])
     geo_file = st.file_uploader("GeoJSON de lotes y focos AGIS", type=["geojson", "json"])
-    tif_file = st.file_uploader("TIFF SAR + NDRE + NDMI", type=["tif", "tiff"])
+    tif_file = st.file_uploader("TIFF ilustrativo de referencia espacial (1 a 3 bandas)", type=["tif", "tiff"])
 
 if not all([csv_file, geo_file, tif_file]):
     st.info("Cargá CSV + GeoJSON + TIFF para comenzar.")
@@ -119,7 +119,10 @@ try:
     preview_cols = [
         c for c in [
             "id_unico", "lote", "cultivo", "prioridad",
-            "ndre", "ndmi", "convergencia"
+            "ndre", "ndmi", "convergencia",
+            "sar_VV_actual_dB", "sar_delta_VV_dB",
+            "sar_VH_actual_dB", "sar_delta_VH_dB",
+            "sar_VH_minus_VV_actual_dB", "sar_delta_VH_minus_VV_dB"
         ] if c in df.columns
     ]
     st.dataframe(
