@@ -916,6 +916,71 @@ def record_map(raster, gdf, record_id):
 # su mapa. Band 1 = SAR_VV.
 # ---------------------------------------------------------
 
+
+
+# ---------------------------------------------------------
+# MAPA DESCRIPTIVO DE COMPORTAMIENTO SAR
+# ---------------------------------------------------------
+
+SAR_BEHAVIOR_COLORS = {
+    "Aumento conjunto en VV y VH": "#B86F3C",
+    "Disminución conjunta en VV y VH": "#477A9E",
+    "Cambios en direcciones diferentes": "#8A7A9B",
+    "Sin variación en VV y VH": "#8A918D",
+    "Sin comparación completa": "#C5C7C4",
+}
+
+def sar_behavior_map(gdf):
+    """Mapa por sectores del comportamiento SAR; no representa prioridad agronómica."""
+    if "tipo_geometria" in gdf.columns:
+        lots = gdf[gdf["tipo_geometria"].astype(str).str.upper() == "LOTE"].copy()
+    else:
+        lots = gdf.copy()
+    if lots.empty or "comportamiento_sar" not in lots.columns:
+        fig, ax = plt.subplots(figsize=(9, 7))
+        ax.set_axis_off()
+        return _save(fig)
+
+    sectors = _spatial_lot_sectors(lots, max_sectors=4)
+    count = len(sectors)
+    if count <= 1:
+        fig, axes = plt.subplots(1, 1, figsize=(9, 7))
+        axes_list = [axes]
+    else:
+        fig, axes = plt.subplots(2, 2, figsize=(10, 7.4))
+        axes_list = list(axes.ravel())
+
+    for idx, ax in enumerate(axes_list):
+        if idx >= count:
+            ax.set_axis_off()
+            continue
+        sector = sectors[idx]
+        v = sector.to_crs(epsg=3857)
+        minx, miny, maxx, maxy = v.total_bounds
+        width = max(maxx - minx, 1)
+        height = max(maxy - miny, 1)
+        margin_x, margin_y = width * 0.10, height * 0.10
+        ax.set_xlim(minx - margin_x, maxx + margin_x)
+        ax.set_ylim(miny - margin_y, maxy + margin_y)
+        _add_satellite_with_retry(ax, v.crs)
+
+        for label, color in SAR_BEHAVIOR_COLORS.items():
+            part = v[v["comportamiento_sar"].astype(str) == label]
+            if part.empty:
+                continue
+            part.plot(
+                ax=ax, facecolor=color, edgecolor="white",
+                linewidth=1.0, alpha=0.72
+            )
+            part.boundary.plot(ax=ax, color=color, linewidth=1.3, alpha=1.0)
+
+        ax.set_title(f"Zona {idx + 1}", fontsize=8, loc="left", pad=2)
+        ax.set_axis_off()
+
+    fig.subplots_adjust(wspace=0.06, hspace=0.12, left=0.02, right=0.98, top=0.97, bottom=0.03)
+    return _save(fig)
+
+
 def radar_record_map(raster, gdf, record_id):
 
     from rasterio.features import geometry_mask
@@ -1057,4 +1122,3 @@ def radar_record_map(raster, gdf, record_id):
     ax.set_axis_off()
     fig.subplots_adjust(bottom=0.18, top=0.98, left=0.03, right=0.97)
     return _save(fig)
-
