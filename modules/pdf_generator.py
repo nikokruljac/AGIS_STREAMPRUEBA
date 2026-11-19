@@ -405,45 +405,37 @@ def _sort_lots_naturally(frame):
 
 
 def _sar_change_interpretation(radar):
-    """Explica el cambio observado en VV sin atribuirlo automáticamente a humedad."""
-    try:
-        actual = float(str(radar.get("vv_actual", "—")).replace(",", "."))
-        anterior = float(str(radar.get("vv_anterior", "—")).replace(",", "."))
-        delta = float(str(radar.get("delta", "—")).replace(",", "."))
-    except (TypeError, ValueError):
+    """Describe cambios trivariados sin asignarles una causa agronómica."""
+    signals = [
+        ("VV", radar.get("delta", "—")),
+        ("VH", radar.get("delta_vh", "—")),
+        ("VH−VV", radar.get("delta_ratio", "—")),
+    ]
+    descriptions = []
+    for name, raw in signals:
+        try:
+            value = float(str(raw).replace(",", "."))
+        except (TypeError, ValueError):
+            continue
+        if abs(value) < 0.005:
+            direction = "se mantuvo prácticamente estable"
+        elif value > 0:
+            direction = f"aumentó {str(raw)} dB"
+        else:
+            direction = f"disminuyó {str(raw).replace('-', '', 1)} dB"
+        descriptions.append(f"{name} {direction}")
+
+    if not descriptions:
         return (
-            "No hay una comparación VV válida con la observación anterior. "
-            "Por lo tanto, esta ficha permite describir la respuesta radar actual, "
-            "pero no establecer si aumentó o disminuyó."
+            "No hay variaciones trivariadas válidas para describir esta comparación. "
+            "La ficha conserva la observación radar como referencia, sin inferir cambios."
         )
 
-    actual_txt = f"{actual:.2f}".replace(".", ",")
-    anterior_txt = f"{anterior:.2f}".replace(".", ",")
-    delta_txt = f"{abs(delta):.2f}".replace(".", ",")
-    if round(delta, 2) == 0:
-        return (
-            f"La señal VV se mantiene prácticamente sin variación respecto de la "
-            f"observación anterior ({actual_txt} dB frente a {anterior_txt} dB). "
-            "En esta comparación retorna al sensor una cantidad de energía similar. "
-            "Esto describe estabilidad de la respuesta radar, no confirma por sí solo "
-            "que la humedad o el estado del cultivo permanezcan sin cambios."
-        )
-    if delta > 0:
-        return (
-            f"La señal VV aumentó {delta_txt} dB respecto de la observación anterior "
-            f"({anterior_txt} a {actual_txt} dB). Esto indica que en la última adquisición "
-            "regresó más energía radar hacia el sensor. El cambio puede estar relacionado "
-            "con variaciones de humedad superficial, rugosidad del suelo o estructura y "
-            "disposición de la vegetación. Con VV por sí sola no es posible distinguir "
-            "entre esas causas ni afirmar que el lote esté más húmedo."
-        )
     return (
-        f"La señal VV disminuyó {delta_txt} dB respecto de la observación anterior "
-        f"({anterior_txt} a {actual_txt} dB). Esto indica que en la última adquisición "
-        "regresó menos energía radar hacia el sensor. El cambio puede estar relacionado "
-        "con variaciones de humedad superficial, rugosidad del suelo o estructura y "
-        "disposición de la vegetación. Con VV por sí sola no es posible distinguir "
-        "entre esas causas ni afirmar que el lote esté más seco."
+        "Entre las dos adquisiciones, " + "; ".join(descriptions) + ". "
+        "Estas diferencias describen cambios en la respuesta radar. Su lectura conjunta "
+        "no permite atribuir automáticamente el cambio a humedad, rugosidad o estructura "
+        "vegetal, ni constituye por sí sola un diagnóstico agronómico."
     )
 
 
@@ -501,9 +493,9 @@ def _interpretation_sections(row, radar_only=False):
     if radar_only:
         radar = _sar_metrics(row)
         radar_line = (
-            f"VV actual: {radar['vv_actual']} dB · "
-            f"VV anterior: {radar['vv_anterior']} dB · "
-            f"variación: {radar['delta']} dB."
+            f"VV: {radar['vv_actual']} dB (anterior {radar['vv_anterior']}; Δ {radar['delta']} dB). "
+            f"VH: {radar['vh_actual']} dB (anterior {radar['vh_anterior']}; Δ {radar['delta_vh']} dB). "
+            f"VH−VV: {radar['ratio_actual']} dB (anterior {radar['ratio_anterior']}; Δ {radar['delta_ratio']} dB)."
         )
         if radar["comparison"] not in ("—", ""):
             radar_line += f" Comparación: {radar['comparison']}."
@@ -517,7 +509,7 @@ def _interpretation_sections(row, radar_only=False):
             ("Qué muestra el cambio", change_text),
             (
                 "Alcance de la interpretación",
-                "La señal VV describe cómo interactuó el radar con la superficie y la vegetación en cada adquisición. Puede responder a humedad, rugosidad y estructura vegetal; por sí sola no permite separar esos factores ni inferir NDMI o NDRE."
+                "VV, VH y la diferencia VH−VV describen componentes relacionados de la respuesta radar. Su lectura conjunta aporta contexto sobre la interacción con la superficie y la vegetación, pero no identifica por sí sola una causa agronómica ni equivale a NDMI o NDRE."
             ),
             (
                 "Seguimiento recomendado",
@@ -884,67 +876,58 @@ def _state_table(df, body, small, follow_df=None):
 
 
 def _sar_metrics(row):
-    """
-    Extrae los valores SAR que ya vienen documentados en el CSV.
-    No recalcula SAR: solamente presenta la evidencia ya generada por AGIS.
-    """
+    """Lee las nueve métricas SAR trivariadas directamente del CSV AGIS."""
+    def metric(field):
+        if field not in row.index or pd.isna(row[field]):
+            return "—"
+        try:
+            value = float(str(row[field]).strip().replace(",", "."))
+            return f"{value:.2f}".replace(".", ",")
+        except (TypeError, ValueError):
+            return "—"
+
+    # Compatibilidad con CSV anteriores: VV puede recuperarse del texto,
+    # pero las versiones actuales deben aportar las columnas numéricas.
+    vv_actual = metric("sar_VV_actual_dB")
+    vv_anterior = metric("sar_VV_anterior_dB")
+    delta_vv = metric("sar_delta_VV_dB")
+
     texts = []
-    for field in (
-        "hallazgo_agis",
-        "fundamento_interpretacion",
-        "hipotesis_agis",
-        "que_revisar",
-    ):
+    for field in ("hallazgo_agis", "fundamento_interpretacion", "hipotesis_agis", "que_revisar"):
         if field in row.index and pd.notna(row[field]):
             texts.append(str(row[field]))
     text = " ".join(texts)
+    number = r"([-+]?\d+(?:[.,]\d+)?)"
 
-    def extract(patterns):
-        if isinstance(patterns, str):
-            patterns = [patterns]
+    def legacy(patterns):
         for pattern in patterns:
             match = re.search(pattern, text, flags=re.IGNORECASE)
             if match:
                 return match.group(1).replace(",", ".").strip()
         return "—"
 
-    number = r"([-+]?\d+(?:[.,]\d+)?)"
-    vv_actual = extract([
-        rf"VV\s+actual\s*:\s*{number}\s*dB",
-        rf"actual\s*VV\s*:\s*{number}\s*dB",
-    ])
-    vv_anterior = extract([
-        rf"VV\s+anterior\s*:\s*{number}\s*dB",
-        rf"anterior\s*VV\s*:\s*{number}\s*dB",
-    ])
-    delta = extract([
-        rf"(?:Δ|DELTA|VARIACI[ÓO]N)\s*VV\s*:\s*{number}\s*dB",
-        rf"ΔVV\s*[:=]?\s*{number}\s*dB",
-    ])
-    comparison = extract(r"Comparación\s*:\s*([^.]+)")
-
-    # Respaldo: algunas exportaciones incorporan etiquetas con puntuación o
-    # separadores distintos. Se buscan los tres valores en cada campo fuente.
     if vv_actual == "—":
-        vv_actual = extract([rf"VV\s+actual\s*[:=]?\s*{number}"])
+        found = legacy([rf"VV\s+actual\s*[:=]?\s*{number}"])
+        vv_actual = found.replace(".", ",") if found != "—" else found
     if vv_anterior == "—":
-        vv_anterior = extract([rf"VV\s+anterior\s*[:=]?\s*{number}"])
-    if delta == "—":
-        delta = extract([rf"(?:Δ|DELTA|VARIACI[ÓO]N)\s*VV?\s*[:=]?\s*{number}"])
-
-    if delta == "—" and vv_actual != "—" and vv_anterior != "—":
-        try:
-            delta = f"{float(vv_actual) - float(vv_anterior):.2f}"
-        except (TypeError, ValueError):
-            pass
-    s1_date = _fmt(row["ultima_pasada_S1"]) if "ultima_pasada_S1" in row.index else "—"
+        found = legacy([rf"VV\s+anterior\s*[:=]?\s*{number}"])
+        vv_anterior = found.replace(".", ",") if found != "—" else found
+    if delta_vv == "—":
+        found = legacy([rf"(?:Δ|DELTA|VARIACI[ÓO]N)\s*VV?\s*[:=]?\s*{number}"])
+        delta_vv = found.replace(".", ",") if found != "—" else found
 
     return {
         "vv_actual": vv_actual,
         "vv_anterior": vv_anterior,
-        "delta": delta,
-        "comparison": comparison,
-        "s1_date": s1_date,
+        "delta": delta_vv,
+        "vh_actual": metric("sar_VH_actual_dB"),
+        "vh_anterior": metric("sar_VH_anterior_dB"),
+        "delta_vh": metric("sar_delta_VH_dB"),
+        "ratio_actual": metric("sar_VH_minus_VV_actual_dB"),
+        "ratio_anterior": metric("sar_VH_minus_VV_anterior_dB"),
+        "delta_ratio": metric("sar_delta_VH_minus_VV_dB"),
+        "comparison": str(row.get("sar_tipo_comparacion", "—")) if pd.notna(row.get("sar_tipo_comparacion", "—")) else "—",
+        "s1_date": _fmt(row["ultima_pasada_S1"]) if "ultima_pasada_S1" in row.index else "—",
     }
 
 
@@ -1186,7 +1169,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
 
         story.append(
             Paragraph(
-                f"Última observación satelital: {latest_s2}",
+                f"{'Última observación radar (Sentinel-1)' if all_sar_mode else 'Última observación óptica (Sentinel-2)'}: {latest_s1 if all_sar_mode else latest_s2}",
                 body
             )
         )
@@ -1972,7 +1955,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
         # Evitamos un segundo salto consecutivo que generaría una página vacía.
         if not all_sar_mode:
             story.append(PageBreak())
-        radar_section_number = "4" if not priority_df.empty else "3"
+        radar_section_number = "2" if all_sar_mode else ("4" if not priority_df.empty else "3")
         story.append(
             Paragraph(
                 f"{radar_section_number}. Lotes con monitoreo por radar",
@@ -2094,9 +2077,21 @@ def build_pdf(df, gdf, raster, logo_bytes):
             story.append(Spacer(1, 4 * mm))
 
             radar_indicator_cells = [
-                _stacked_metric_cell("VV actual", f"{sar_info['vv_actual']} dB", value_size=15, title_size=8.5),
-                _stacked_metric_cell("VV anterior", f"{sar_info['vv_anterior']} dB", f"ΔVV: {sar_info['delta']} dB", value_size=15, title_size=8.5, note_size=7.5),
-                _stacked_metric_cell("Última observación S1", sar_info['s1_date'], sar_info['comparison'], value_size=11, title_size=8.5, note_size=7.5),
+                _stacked_metric_cell(
+                    "VV · dB", f"{sar_info['vv_actual']} dB",
+                    f"Anterior: {sar_info['vv_anterior']} · Δ {sar_info['delta']} dB",
+                    value_size=13, title_size=8.5, note_size=7.0
+                ),
+                _stacked_metric_cell(
+                    "VH · dB", f"{sar_info['vh_actual']} dB",
+                    f"Anterior: {sar_info['vh_anterior']} · Δ {sar_info['delta_vh']} dB",
+                    value_size=13, title_size=8.5, note_size=7.0
+                ),
+                _stacked_metric_cell(
+                    "VH−VV · dB", f"{sar_info['ratio_actual']} dB",
+                    f"Anterior: {sar_info['ratio_anterior']} · Δ {sar_info['delta_ratio']} dB",
+                    value_size=13, title_size=8.5, note_size=7.0
+                ),
             ]
 
             radar_indicators = Table(
@@ -2117,6 +2112,11 @@ def build_pdf(df, gdf, raster, logo_bytes):
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
             ]))
             story.append(radar_indicators)
+            story.append(Paragraph(
+                f"Última observación Sentinel-1: {sar_info['s1_date']} · Comparación: {sar_info['comparison']}",
+                ParagraphStyle("RadarAcquisitionMeta", parent=small, fontSize=7.0,
+                               leading=8.5, textColor=colors.HexColor("#5A5F5C"))
+            ))
             story.append(Spacer(1, 3 * mm))
 
             map_title = RoundedTable([[
@@ -2176,20 +2176,6 @@ def build_pdf(df, gdf, raster, logo_bytes):
                     )
                 )
 
-            story.append(
-                Paragraph(
-                    "El mapa muestra la señal SAR disponible para mantener la referencia espacial del lote durante la falta de cobertura óptica.",
-                    ParagraphStyle(
-                        "RadarMapNoteFinal",
-                        parent=small,
-                        fontName=FONT_REGULAR,
-                        fontSize=7.2,
-                        leading=9,
-                        textColor=colors.HexColor("#5A5F5C"),
-                        alignment=TA_LEFT
-                    )
-                )
-            )
 
     # ---------------------------------------------------------
     # CONSTRUCCIÓN
