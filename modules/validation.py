@@ -51,6 +51,33 @@ def validate_csv(df):
         if invalid.any():
             errors.append(f"Hay fechas inválidas en {field}.")
 
+
+    sar_mask = df["SAR_disponible"].astype(str).str.strip().str.lower().isin(
+        ["true", "1", "sí", "si", "yes"]
+    )
+    sar_fields = [
+        "sar_VV_actual_dB", "sar_VV_anterior_dB", "sar_delta_VV_dB",
+        "sar_VH_actual_dB", "sar_VH_anterior_dB", "sar_delta_VH_dB",
+        "sar_VH_minus_VV_actual_dB", "sar_VH_minus_VV_anterior_dB",
+        "sar_delta_VH_minus_VV_dB",
+    ]
+    if sar_mask.any():
+        missing_sar = [field for field in sar_fields if field not in df.columns]
+        if missing_sar:
+            errors.append(
+                "El CSV declara evidencia SAR, pero faltan columnas del contrato trivariado: "
+                + ", ".join(missing_sar)
+            )
+        else:
+            for field in sar_fields:
+                values = pd.to_numeric(df.loc[sar_mask, field], errors="coerce")
+                if values.isna().any():
+                    errors.append(
+                        f"La columna {field} contiene valores SAR vacíos o no numéricos "
+                        "en registros con SAR disponible."
+                    )
+                    break
+
     return errors
 
 
@@ -78,8 +105,8 @@ def validate_raster_contract(raster):
     data = raster.get("data")
     if data is None or getattr(data, "ndim", 0) != 3:
         return ["El TIFF no tiene una estructura de bandas válida."]
-    if data.shape[0] not in (2, 3):
-        errors.append(f"El TIFF debe tener 2 o 3 bandas; tiene {data.shape[0]}.")
+    if data.shape[0] not in (1, 2, 3):
+        errors.append(f"El TIFF debe tener 1, 2 o 3 bandas; tiene {data.shape[0]}.")
     if not data.shape[1] or not data.shape[2]:
         errors.append("El TIFF no contiene píxeles.")
     if raster.get("crs") is None:
