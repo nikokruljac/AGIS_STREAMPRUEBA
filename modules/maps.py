@@ -417,7 +417,10 @@ def raster_map(
     if factor > 1:
         data = data[::factor, ::factor]
     vmin, vmax = _visual_limits(data)
-    cmap = NDMI_CMAP if band == 3 else INDEX_CMAP
+    if band == 1:
+        cmap = SAR_CMAP
+    else:
+        cmap = NDMI_CMAP if band == 3 else INDEX_CMAP
 
     sectors = _spatial_lot_sectors(gdf) if gdf is not None and not gdf.empty else []
     if not sectors:
@@ -493,7 +496,10 @@ def raster_map(
         scalar.set_array([])
         cax = fig.add_axes([0.22, 0.095, 0.56, 0.022])
         cbar = fig.colorbar(scalar, cax=cax, orientation="horizontal")
-        legend_name = "NDMI · menor a mayor valor" if band == 3 else "NDRE · menor a mayor valor"
+        legend_name = (
+            "SAR VV · menor a mayor retrodispersión" if band == 1
+            else ("NDMI · menor a mayor valor" if band == 3 else "NDRE · menor a mayor valor")
+        )
         cbar.set_label(legend_name, fontsize=6.5, labelpad=2)
         cbar.ax.tick_params(labelsize=6, length=1.5, pad=1)
         cbar.outline.set_linewidth(0.5)
@@ -571,19 +577,16 @@ def record_map(raster, gdf, record_id):
 
     raster_data = raster["data"]
 
-    if raster_data.shape[0] < 2:
-        return _record_map_without_raster(
-            lots_plot,
-            foci_plot,
-            crs,
-            "Información raster incompleta"
-        )
-
+    # El TIFF es una referencia cartográfica ilustrativa. Puede contener
+    # una sola banda (óptica o SAR) o el compuesto histórico SAR + índices.
+    # No se exige una combinación fija para poder ubicar espacialmente el lote.
     # Las bandas se mantienen como vistas del array original.
-    # No convertir aquí el raster completo a float64: con un TIFF
-    # productivo de 3 bandas eso genera copias de cientos de MB.
     sar_full = raster_data[0]
-    ndre_full = raster_data[1]
+    ndre_full = raster_data[1] if raster_data.shape[0] >= 2 else None
+    descriptions = raster.get("descriptions") or ()
+    first_description = str(descriptions[0] or "").strip().upper() if descriptions else ""
+    first_is_sar = first_description in {"SAR_VV", "VV", "S1_VV"}
+    base_cmap = SAR_CMAP if first_is_sar else AGIS_CMAP
 
     transform = raster["transform"]
 
@@ -662,12 +665,12 @@ def record_map(raster, gdf, record_id):
         col_start:col_end
     ].copy()
 
-    ndre = ndre_full[
-        row_start:row_end,
-        col_start:col_end
-    ].copy()
+    ndre = (
+        ndre_full[row_start:row_end, col_start:col_end].copy()
+        if ndre_full is not None else None
+    )
 
-    if sar.size == 0 or ndre.size == 0:
+    if sar.size == 0 or (ndre is not None and ndre.size == 0):
 
         return _record_map_without_raster(
             lots_plot,
@@ -717,7 +720,8 @@ def record_map(raster, gdf, record_id):
         )
 
         sar[~mask] = np.nan
-        ndre[~mask] = np.nan
+        if ndre is not None:
+            ndre[~mask] = np.nan
 
     except Exception:
 
@@ -743,7 +747,8 @@ def record_map(raster, gdf, record_id):
 
     if factor > 1:
         sar = sar[::factor, ::factor]
-        ndre = ndre[::factor, ::factor]
+        if ndre is not None:
+            ndre = ndre[::factor, ::factor]
 
     # -----------------------------------------------------
     # EXTENSIÓN ESPACIAL DEL RECORTE
@@ -774,7 +779,7 @@ def record_map(raster, gdf, record_id):
     # -----------------------------------------------------
 
     sar_vmin, sar_vmax = _visual_limits(sar)
-    ndre_vmin, ndre_vmax = _visual_limits(ndre)
+    ndre_vmin, ndre_vmax = _visual_limits(ndre) if ndre is not None else (None, None)
 
     # -----------------------------------------------------
     # FIGURA
@@ -826,7 +831,7 @@ def record_map(raster, gdf, record_id):
 
         ax.imshow(
             np.ma.masked_invalid(sar),
-            cmap=SAR_CMAP,
+            cmap=base_cmap,
             interpolation="nearest",
             extent=extent,
             origin="upper",
@@ -839,7 +844,7 @@ def record_map(raster, gdf, record_id):
     # NDRE SOBRE SAR
     # -----------------------------------------------------
 
-    if np.any(np.isfinite(ndre)):
+    if ndre is not None and np.any(np.isfinite(ndre)):
 
         ax.imshow(
             np.ma.masked_invalid(ndre),
@@ -908,7 +913,10 @@ def record_map(raster, gdf, record_id):
     # Leyendas continuas de las dos capas realmente dibujadas.
     # Los rangos son los límites visuales del recorte, no umbrales diagnósticos.
     if sar_vmin is not None and sar_vmax is not None:
-        _add_continuous_legend(fig, ax, SAR_CMAP, sar_vmin, sar_vmax, "SAR VV", "dB")
+        if first_is_sar:
+            _add_continuous_legend(fig, ax, SAR_CMAP, sar_vmin, sar_vmax, "SAR VV", "dB")
+        elif ndre is None:
+            _add_continuous_legend(fig, ax, AGIS_CMAP, sar_vmin, sar_vmax, "Capa raster ilustrativa")
     if ndre_vmin is not None and ndre_vmax is not None:
         _add_continuous_legend(fig, ax, INDEX_CMAP, ndre_vmin, ndre_vmax, "NDRE", "índice")
 
@@ -988,7 +996,7 @@ def radar_record_map(raster, gdf, record_id):
         return None
 
     sar = sar_full[row_start:row_end, col_start:col_end].astype(np.float32, copy=True)
-    sar[sar <= -9998] = np.nan
+    sar[(~np.isfinite(sar)) | (sar <= -9998)] = np.nan
     crop_window = Window(col_start, row_start, col_end - col_start, row_end - row_start)
     crop_transform = rasterio.windows.transform(crop_window, transform)
 
