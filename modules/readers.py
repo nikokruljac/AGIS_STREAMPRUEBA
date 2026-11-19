@@ -51,9 +51,9 @@ def read_raster(uploaded_file):
     uploaded_file.seek(0)
     try:
         with rasterio.io.MemoryFile(data).open() as src:
-            if src.count not in (2, 3):
+            if src.count not in (1, 2, 3):
                 raise ValueError(
-                    f"El TIFF debe tener 2 o 3 bandas; se encontraron {src.count}."
+                    f"El TIFF debe tener 1, 2 o 3 bandas; se encontraron {src.count}."
                 )
             if src.crs is None:
                 raise ValueError("El TIFF no declara un CRS.")
@@ -62,6 +62,13 @@ def read_raster(uploaded_file):
             arr = src.read(out_dtype="float32")
             transform, crs, bounds = src.transform, src.crs, src.bounds
             nodata, descriptions = src.nodata, src.descriptions
+            # Normaliza NoData, NaN e infinitos para que los mapas no los
+            # interpreten como valores reales ni alteren sus escalas.
+            invalid = ~np.isfinite(arr)
+            if nodata is not None:
+                invalid |= np.isclose(arr, np.float32(nodata))
+            invalid |= arr <= -9998
+            arr[invalid] = np.nan
     except ValueError:
         raise
     except Exception as exc:
