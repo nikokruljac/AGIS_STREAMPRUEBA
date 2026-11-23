@@ -28,8 +28,6 @@ from reportlab.platypus import (
 
 from .maps import (
     general_priority_map,
-    sar_behavior_map,
-    SAR_BEHAVIOR_COLORS,
     raster_map,
     record_map,
     radar_record_map,
@@ -646,11 +644,7 @@ def _interpretation_sections(row, radar_only=False):
         )
         if sar["comparison"] not in ("—", ""):
             radar_text += f" {sar['comparison']}."
-        radar_text += (
-            " El radar se presenta como evidencia complementaria; no se fuerza una equivalencia con NDMI o NDRE. "
-            "Nota metodológica: VH−VV se calcula primero como diferencia píxel a píxel y luego se resume "
-            "mediante la mediana espacial; por eso no equivale necesariamente a mediana(VH)−mediana(VV)."
-        )
+        radar_text += " El radar se presenta como evidencia complementaria; no se fuerza una equivalencia con NDMI o NDRE."
     else:
         radar_text = "Hay disponibilidad SAR, pero el CSV no aporta una variación VV interpretable para esta ficha."
 
@@ -1006,11 +1000,6 @@ def _sar_metrics(row):
     comparison = str(row.get("sar_tipo_comparacion", row.get("__tipo_comparacion_SAR", "—")))
     if comparison in ("nan", "None", ""):
         comparison = "—"
-    elif comparison == "MISMA_ORBITA_SENTIDO_PLATAFORMA":
-        comparison = (
-            "Comparación realizada con la misma órbita relativa, "
-            "sentido de observación y plataforma"
-        )
     s1_date = _fmt(row.get("sar_fecha_actual", row.get("ultima_pasada_S1", "—")))
 
     return {
@@ -1258,12 +1247,12 @@ def build_pdf(df, gdf, raster, logo_bytes):
             )
         )
 
-        story.append(Paragraph(
-            f"Última observación óptica (Sentinel-2): {latest_s2}", body
-        ))
-        story.append(Paragraph(
-            f"Última observación radar (Sentinel-1): {latest_s1}", body
-        ))
+        story.append(
+            Paragraph(
+                f"Última observación satelital: {latest_s2}",
+                body
+            )
+        )
 
     if all_sar_mode:
         sar_notice = RoundedTable(
@@ -1340,7 +1329,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
     ]))
 
     summary_title = Paragraph(
-        "<b>Estado de las prioridades de atención</b>" if all_sar_mode else "<b>Resumen de prioridades</b>",
+        "<b>Resumen de prioridades</b>",
         ParagraphStyle(
             "PrioritySummaryTitleFinal",
             parent=body,
@@ -1367,172 +1356,108 @@ def build_pdf(df, gdf, raster, logo_bytes):
         ("BOTTOMPADDING", (0, 1), (-1, -1), 7),
     ]))
     story.append(summary_panel)
-    if all_sar_mode:
-        story.append(Spacer(1, 1.5 * mm))
-        story.append(Paragraph(
-            "No se asignaron prioridades alta o media en esta entrega; los 76 lotes permanecen en seguimiento. "
-            "El comportamiento radar se describe por separado, sin convertirlo en prioridad agronómica.",
-            small
-        ))
     story.append(Spacer(1, 5 * mm))
 
-    # 2) En modalidad 100% SAR se resume el comportamiento radar,
-    # sin convertirlo en una prioridad agronómica. En modalidad óptica/mixta
-    # se conserva la distribución de prioridades original.
-    if all_sar_mode:
-        behavior_counts = df.apply(_sar_pattern_label, axis=1).value_counts()
-        behavior_order = [
-            "Aumento conjunto en VV y VH",
-            "Disminución conjunta en VV y VH",
-            "Cambios en direcciones diferentes",
-            "Sin variación en VV y VH",
-            "Sin comparación completa",
-        ]
-        behavior_cards = []
-        for label in behavior_order:
-            count = int(behavior_counts.get(label, 0))
-            if count <= 0:
-                continue
-            behavior_cards.append(
-                _stacked_metric_cell(
-                    label.upper(), count,
-                    note_text=f"{count / len(df) * 100:.0f}% de los lotes",
-                    value_size=19, title_size=7.5, note_size=7.2
-                )
-            )
-        behavior_grid = Table(
-            [behavior_cards],
-            colWidths=[175 * mm / max(1, len(behavior_cards))] * len(behavior_cards),
-            rowHeights=[31 * mm],
+    # 2) Distribución: gráfico grande y protagonista.
+    donut = Image(
+        _priority_donut(high, medium, follow),
+        width=108 * mm,
+        height=73 * mm
+    )
+
+    donut_title = Paragraph(
+        "<b>Distribución de prioridades</b>",
+        ParagraphStyle(
+            "PriorityDonutTitleFinal",
+            parent=body,
+            fontName=FONT_BOLD,
+            fontSize=12,
+            leading=14,
+            textColor=colors.HexColor(GREEN),
+            alignment=TA_CENTER
         )
-        behavior_grid.setStyle(TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F1F3F2")),
-            ("LINEBEFORE", (1, 0), (-1, -1), 0.6, colors.white),
-            ("LEFTPADDING", (0, 0), (-1, -1), 7),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ]))
-        behavior_title = Paragraph(
-            "<b>Comportamiento observado por radar</b>",
-            ParagraphStyle(
-                "SARBehaviorTitle", parent=body, fontName=FONT_BOLD,
-                fontSize=12, leading=14, textColor=colors.HexColor(GREEN)
-            )
+    )
+
+    donut_note = Paragraph(
+        "La distribución permite identificar rápidamente dónde concentrar la atención.",
+        ParagraphStyle(
+            "PriorityDonutNoteFinal",
+            parent=small,
+            fontSize=8.2,
+            leading=10,
+            alignment=TA_CENTER
         )
-        behavior_note = Paragraph(
-            "Clasificación descriptiva según la dirección de los cambios en VV y VH. "
-            "No expresa magnitud, causa ni condición agronómica.",
-            ParagraphStyle(
-                "SARBehaviorNote", parent=small, fontSize=7.8, leading=9.5,
-                alignment=TA_LEFT, textColor=colors.HexColor("#5A5F5C")
-            )
-        )
-        behavior_panel = RoundedTable(
-            [[behavior_title], [behavior_grid], [behavior_note]],
-            colWidths=[175 * mm], radius=8,
-            panel_fill=colors.white, panel_stroke=colors.HexColor("#D5DDD8")
-        )
-        behavior_panel.setStyle(TableStyle([
-            ("LEFTPADDING", (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("TOPPADDING", (0, 0), (-1, 0), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, 0), 4),
-            ("TOPPADDING", (0, 1), (-1, 1), 1),
-            ("BOTTOMPADDING", (0, 1), (-1, 1), 3),
-            ("TOPPADDING", (0, 2), (-1, 2), 3),
-            ("BOTTOMPADDING", (0, 2), (-1, 2), 7),
-        ]))
-        story.append(behavior_panel)
-    else:
-        donut = Image(_priority_donut(high, medium, follow), width=108 * mm, height=73 * mm)
-        donut_title = Paragraph(
-            "<b>Distribución de prioridades</b>",
-            ParagraphStyle(
-                "PriorityDonutTitleFinal", parent=body, fontName=FONT_BOLD,
-                fontSize=12, leading=14, textColor=colors.HexColor(GREEN),
-                alignment=TA_CENTER
-            )
-        )
-        donut_note = Paragraph(
-            "La distribución resume la cantidad de lotes por nivel de prioridad.",
-            ParagraphStyle(
-                "PriorityDonutNoteFinal", parent=small, fontSize=8.2,
-                leading=10, alignment=TA_CENTER
-            )
-        )
-        donut_panel = RoundedTable(
-            [[donut_title], [donut], [donut_note]],
-            colWidths=[175 * mm], radius=8,
-            panel_fill=colors.white, panel_stroke=colors.HexColor("#D5DDD8")
-        )
-        donut_panel.setStyle(TableStyle([
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("TOPPADDING", (0, 0), (-1, 0), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, 0), 1),
-            ("TOPPADDING", (0, 1), (-1, 1), 0),
-            ("BOTTOMPADDING", (0, 1), (-1, 1), 0),
-            ("TOPPADDING", (0, 2), (-1, 2), 2),
-            ("BOTTOMPADDING", (0, 2), (-1, 2), 7),
-        ]))
-        story.append(donut_panel)
+    )
+
+    donut_panel = RoundedTable(
+        [[donut_title], [donut], [donut_note]],
+        colWidths=[175 * mm],
+        radius=8,
+        panel_fill=colors.white,
+        panel_stroke=colors.HexColor("#D5DDD8")
+    )
+    donut_panel.setStyle(TableStyle([
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, 0), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 1),
+        ("TOPPADDING", (0, 1), (-1, 1), 0),
+        ("BOTTOMPADDING", (0, 1), (-1, 1), 0),
+        ("TOPPADDING", (0, 2), (-1, 2), 2),
+        ("BOTTOMPADDING", (0, 2), (-1, 2), 7),
+    ]))
+    story.append(donut_panel)
     story.append(Spacer(1, 5 * mm))
 
     # 3) Superficie de prioridad alta: bloque independiente y visible.
-    if not all_sar_mode:
-        area_panel = RoundedTable(
-            [[
-                Paragraph(
-                    "<b>SUPERFICIE EN PRIORIDAD ALTA</b>",
-                    ParagraphStyle(
-                        "HighAreaLabelFinal",
-                        parent=body,
-                        fontName=FONT_BOLD,
-                        fontSize=10.5,
-                        leading=13,
-                        textColor=colors.HexColor(GREEN)
-                    )
-                ),
-                Paragraph(
-                    f"<font size='18'><b>{_ha_text(high_area_ha)}</b></font>",
-                    ParagraphStyle(
-                        "HighAreaValueFinal",
-                        parent=body,
-                        fontName=FONT_BOLD,
-                        fontSize=12,
-                        leading=15,
-                        textColor=colors.HexColor(CHARCOAL),
-                        alignment=TA_RIGHT
-                    )
+    area_panel = RoundedTable(
+        [[
+            Paragraph(
+                "<b>SUPERFICIE EN PRIORIDAD ALTA</b>",
+                ParagraphStyle(
+                    "HighAreaLabelFinal",
+                    parent=body,
+                    fontName=FONT_BOLD,
+                    fontSize=10.5,
+                    leading=13,
+                    textColor=colors.HexColor(GREEN)
                 )
-            ]],
-            colWidths=[125 * mm, 50 * mm],
-            radius=8,
-            panel_fill=colors.HexColor("#EAF3EE"),
-            panel_stroke=colors.HexColor(GREEN)
-        )
-        area_panel.setStyle(TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 9),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 9),
-            ("TOPPADDING", (0, 0), (-1, -1), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-        ]))
-        story.append(area_panel)
+            ),
+            Paragraph(
+                f"<font size='18'><b>{_ha_text(high_area_ha)}</b></font>",
+                ParagraphStyle(
+                    "HighAreaValueFinal",
+                    parent=body,
+                    fontName=FONT_BOLD,
+                    fontSize=12,
+                    leading=15,
+                    textColor=colors.HexColor(CHARCOAL),
+                    alignment=TA_RIGHT
+                )
+            )
+        ]],
+        colWidths=[125 * mm, 50 * mm],
+        radius=8,
+        panel_fill=colors.HexColor("#EAF3EE"),
+        panel_stroke=colors.HexColor(GREEN)
+    )
+    area_panel.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 9),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]))
+    story.append(area_panel)
     story.append(Spacer(1, 5 * mm))
 
-    closing_summary = (
-        "Los cambios descritos corresponden al comportamiento de la señal radar y no "
-        "constituyen por sí solos una condición ni una prioridad agronómica. La evaluación "
-        "final corresponde al profesional."
-        if all_sar_mode else
-        "AGIS organiza la evidencia disponible para señalar qué merece atención y por qué. "
-        "La evaluación agronómica final corresponde al profesional."
+    story.append(
+        Paragraph(
+            "AGIS organiza la evidencia disponible para señalar qué merece atención y por qué. La evaluación agronómica final corresponde al profesional.",
+            body
+        )
     )
-    story.append(Paragraph(closing_summary, body))
     story.append(
         PageBreak()
     )
@@ -1541,27 +1466,20 @@ def build_pdf(df, gdf, raster, logo_bytes):
     # MAPA GENERAL
     # ---------------------------------------------------------
 
-    map_section_title = (
-        "1. Distribución del comportamiento radar" if all_sar_mode
-        else "1. Dónde prestar atención"
+    story.append(
+        Paragraph(
+            "1. Dónde prestar atención",
+            h2
+        )
     )
-    story.append(Paragraph(map_section_title, h2))
 
-    map_gdf = gdf.copy()
-    if all_sar_mode and "id_unico" in map_gdf.columns:
-        behavior_lookup = df[["id_unico"]].copy()
-        behavior_lookup["comportamiento_sar"] = df.apply(_sar_pattern_label, axis=1).values
-        behavior_lookup["id_unico"] = behavior_lookup["id_unico"].astype(str)
-        map_gdf["id_unico"] = map_gdf["id_unico"].astype(str)
-        map_gdf = map_gdf.merge(behavior_lookup, on="id_unico", how="left", suffixes=("", "_csv"))
-        if "comportamiento_sar_csv" in map_gdf.columns:
-            map_gdf["comportamiento_sar"] = map_gdf["comportamiento_sar_csv"].fillna(map_gdf.get("comportamiento_sar"))
-            map_gdf = map_gdf.drop(columns=["comportamiento_sar_csv"])
-        map_image = sar_behavior_map(map_gdf)
-    else:
-        map_image = general_priority_map(map_gdf)
-
-    story.append(Image(map_image, width=175 * mm, height=132 * mm))
+    story.append(
+        Image(
+            general_priority_map(gdf),
+            width=175 * mm,
+            height=132 * mm
+        )
+    )
 
     story.append(
         Spacer(1, 3 * mm)
@@ -1578,18 +1496,11 @@ def build_pdf(df, gdf, raster, logo_bytes):
         leading=10,
         textColor=colors.HexColor(CHARCOAL),
     )
-    if all_sar_mode:
-        legend_items = [
-            (SAR_BEHAVIOR_COLORS["Aumento conjunto en VV y VH"], "Aumento conjunto VV y VH"),
-            (SAR_BEHAVIOR_COLORS["Disminución conjunta en VV y VH"], "Disminución conjunta VV y VH"),
-            (SAR_BEHAVIOR_COLORS["Cambios en direcciones diferentes"], "Direcciones diferentes"),
-        ]
-    else:
-        legend_items = [
-            ("#FF1744", "Prioridad alta"),
-            ("#FFF000", "Prioridad media"),
-            ("#00FF66", "Seguimiento"),
-        ]
+    legend_items = [
+        ("#FF1744", "Prioridad alta"),
+        ("#FFF000", "Prioridad media"),
+        ("#00FF66", "Seguimiento"),
+    ]
     legend_cells = []
     for color_hex, label in legend_items:
         swatch = Table(
@@ -1618,17 +1529,31 @@ def build_pdf(df, gdf, raster, logo_bytes):
     story.append(legend)
     story.append(Spacer(1, 1.5 * mm))
     if all_sar_mode:
+        pattern_counts = df.apply(_sar_pattern_label, axis=1).value_counts()
+        pattern_order = [
+            "Aumento conjunto en VV y VH",
+            "Disminución conjunta en VV y VH",
+            "Cambios en direcciones diferentes",
+            "Sin variación en VV y VH",
+            "Sin comparación completa",
+        ]
+        pattern_text = "  ·  ".join(
+            f"<b>{int(pattern_counts.get(label, 0))}</b> {label.lower()}"
+            for label in pattern_order if int(pattern_counts.get(label, 0)) > 0
+        )
+        story.append(Paragraph("<b>Comportamiento radar de los lotes</b>", small))
+        story.append(Paragraph(pattern_text, small))
         story.append(Paragraph(
-            "Cada lote se agrupa por la dirección conjunta de los cambios VV y VH. "
-            "La categoría describe la respuesta radar entre dos adquisiciones comparables; "
-            "no identifica una causa ni indica por sí sola una condición favorable o desfavorable.",
+            "Este resumen describe la dirección de los cambios observados; no representa una clasificación de condición ni una prioridad agronómica.",
             small
         ))
     else:
-        story.append(Paragraph(
-            "La distribución espacial permite localizar los lotes según su prioridad de atención.",
-            small
-        ))
+        story.append(
+            Paragraph(
+                "La distribución espacial permite localizar los lotes según su prioridad de atención.",
+                small
+            )
+        )
 
     story.append(
         PageBreak()
@@ -1820,6 +1745,13 @@ def build_pdf(df, gdf, raster, logo_bytes):
                 h2
             )
         )
+        story.append(
+            Paragraph(
+                "Lotes que requieren atención priorizada según la evidencia analizada por AGIS.",
+                body
+            )
+        )
+        story.append(Spacer(1, 5 * mm))
 
     def _priority_config(priority):
         """
@@ -1986,8 +1918,13 @@ def build_pdf(df, gdf, raster, logo_bytes):
         ).strip().lower()
 
         if raw_conv in ("true", "1", "sí", "si", "yes"):
-            consistency_title = "Las señales coinciden"
-            consistency_note = "NDMI y NDRE apuntan en la misma dirección."
+            # "convergencia" representa coincidencia de señales relativas bajas,
+            # no que ambos índices evolucionen en la misma dirección temporal.
+            consistency_title = "Convergencia relativa"
+            consistency_note = (
+                "Ambos indicadores presentan valores relativamente bajos; "
+                "esto no confirma deterioro."
+            )
             consistency_bg = "#F0F6F2"
             consistency_color = GREEN
         elif raw_conv in ("false", "0", "no"):
@@ -2002,13 +1939,18 @@ def build_pdf(df, gdf, raster, logo_bytes):
                 or not ndre_state
             )
             if has_inconclusive:
-                consistency_title = "Convergencia no confirmada"
-                consistency_note = "La evidencia no permite establecer una respuesta coincidente."
+                consistency_title = "Convergencia no evaluable"
+                consistency_note = (
+                    "Falta evidencia comparable para establecer una coincidencia "
+                    "de señales relativas."
+                )
                 consistency_bg = "#F1F3F5"
                 consistency_color = CHARCOAL
             else:
-                consistency_title = "Las señales divergen"
-                consistency_note = "NDMI y NDRE muestran respuestas relativas diferentes."
+                consistency_title = "Sin convergencia relativa"
+                consistency_note = (
+                    "No se observa señal baja relativa simultánea en ambos indicadores."
+                )
                 consistency_bg = "#FFFBE6"
                 consistency_color = "#8A7600"
         else:
@@ -2123,7 +2065,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
         # Evitamos un segundo salto consecutivo que generaría una página vacía.
         if not all_sar_mode:
             story.append(PageBreak())
-        radar_section_number = "2" if all_sar_mode else ("4" if not priority_df.empty else "3")
+        radar_section_number = "4" if not priority_df.empty else "3"
         story.append(
             Paragraph(
                 f"{radar_section_number}. Lotes con monitoreo por radar",
@@ -2287,8 +2229,6 @@ def build_pdf(df, gdf, raster, logo_bytes):
                 f"<font color='#C43D3D'><b>↓ Disminuyó</b></font>  ·  "
                 f"<font color='#777777'><b>→ Sin variación</b></font>  "
                 f"<font color='#777777'>| Las flechas indican dirección del cambio, no una condición favorable o desfavorable. "
-                f"VH−VV se calcula primero como diferencia píxel a píxel y luego se resume mediante la mediana espacial; "
-                f"por eso no tiene por qué coincidir con VH mediano menos VV mediano. "
                 f"Adquisición: {sar_info['s1_date']} · {sar_info['comparison']}</font>",
                 small
             ))
@@ -2379,3 +2319,4 @@ def build_pdf(df, gdf, raster, logo_bytes):
     out.seek(0)
 
     return out
+
