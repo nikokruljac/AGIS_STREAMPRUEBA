@@ -611,9 +611,10 @@ def _interpretation_sections(row, radar_only=False):
 
     if conv in ("true", "1", "sí", "si", "yes"):
         relation = (
-            f"Hay convergencia: NDMI ({ndmi_label.lower()}) y NDRE "
-            f"({ndre_label.lower()}) presentan una respuesta relativa coincidente. "
-            "Esto refuerza la consistencia de la señal, pero no identifica por sí solo su causa."
+            f"Hay convergencia relativa: NDMI ({ndmi_label.lower()}) y NDRE "
+            f"({ndre_label.lower()}) presentan valores relativamente bajos frente "
+            "al conjunto comparable. Esto no demuestra un cambio temporal, "
+            "deterioro ni una causa agronómica."
         )
     elif conv in ("false", "0", "no") and has_inconclusive:
         relation = (
@@ -669,11 +670,24 @@ def _interpretation_sections(row, radar_only=False):
     if not scope:
         scope = "La señal satelital no determina por sí sola una causa agronómica."
 
+    # Guardarraíl semántico: una convergencia relativa no describe una
+    # tendencia temporal ni demuestra un cambio simultáneo en el cultivo.
+    interpretation_type = value("tipo_interpretacion", "").upper()
+    followup_meaning = value("hipotesis_agis", "—")
+    if interpretation_type == "CONVERGENCIA_NDMI_NDRE":
+        crop_name = value("cultivo", "cultivo").lower()
+        followup_meaning = (
+            "La coincidencia de valores relativamente bajos en NDMI y NDRE "
+            f"frente al conjunto comparable justifica revisar conjuntamente el "
+            f"contexto hídrico y el estado de la vegetación de {crop_name}. "
+            "No demuestra un cambio temporal, deterioro ni una causa agronómica."
+        )
+
     return [
         ("Qué observamos", observation),
         ("Cómo se relacionan las evidencias", relation),
         ("Qué aporta el radar", radar_text),
-        ("Qué significa para el seguimiento", value("hipotesis_agis", "—")),
+        ("Qué significa para el seguimiento", followup_meaning),
         ("Qué conviene verificar", value("que_revisar", "—")),
         ("Alcance de la interpretación", scope),
     ]
@@ -1786,15 +1800,15 @@ def build_pdf(df, gdf, raster, logo_bytes):
         raw = str(value).strip().lower()
         if raw in ("true", "1", "sí", "si", "yes"):
             return (
-                "Sí hay consistencia",
-                "NDMI y NDRE muestran una tendencia similar."
+                "Convergencia relativa",
+                "Ambos indicadores presentan valores relativamente bajos frente a sus comparables."
             )
         if raw in ("false", "0", "no"):
             return (
-                "Señales no coincidentes",
-                "NDMI y NDRE no muestran la misma tendencia."
+                "Sin convergencia relativa",
+                "No se observa una señal relativa baja simultánea en ambos indicadores."
             )
-        return ("Sin conclusión", "No hay evidencia suficiente para expresarlo.")
+        return ("No evaluable", "No hay evidencia suficiente para establecer la relación.")
 
     def _value_text(row, field):
         return _fmt(row[field]) if field in row.index else "—"
@@ -1918,13 +1932,8 @@ def build_pdf(df, gdf, raster, logo_bytes):
         ).strip().lower()
 
         if raw_conv in ("true", "1", "sí", "si", "yes"):
-            # "convergencia" representa coincidencia de señales relativas bajas,
-            # no que ambos índices evolucionen en la misma dirección temporal.
             consistency_title = "Convergencia relativa"
-            consistency_note = (
-                "Ambos indicadores presentan valores relativamente bajos; "
-                "esto no confirma deterioro."
-            )
+            consistency_note = "Ambos indicadores presentan valores relativamente bajos frente a sus comparables."
             consistency_bg = "#F0F6F2"
             consistency_color = GREEN
         elif raw_conv in ("false", "0", "no"):
@@ -1940,17 +1949,12 @@ def build_pdf(df, gdf, raster, logo_bytes):
             )
             if has_inconclusive:
                 consistency_title = "Convergencia no evaluable"
-                consistency_note = (
-                    "Falta evidencia comparable para establecer una coincidencia "
-                    "de señales relativas."
-                )
+                consistency_note = "Falta evidencia comparable para establecer la relación entre ambos indicadores."
                 consistency_bg = "#F1F3F5"
                 consistency_color = CHARCOAL
             else:
                 consistency_title = "Sin convergencia relativa"
-                consistency_note = (
-                    "No se observa señal baja relativa simultánea en ambos indicadores."
-                )
+                consistency_note = "No se observa una señal relativa baja simultánea en ambos indicadores."
                 consistency_bg = "#FFFBE6"
                 consistency_color = "#8A7600"
         else:
