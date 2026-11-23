@@ -1,5 +1,5 @@
 # AGIS PDF GENERATOR — ADAPTATIVO SAR TRIVARIADO V5
-# CORRECCIÓN DE LENGUAJE PARA ENTREGA 2026-11-23: categorías relativas, sin diagnóstico causal.\n# Basado en V2. Ajustes acotados: lectura direccional de VV y orden natural estable.\n\nMIXED_GREEN = "#6F927D"
+# V3 — FICHAS REORGANIZADAS: lectura integrada óptico-SAR y orientación de campo.\n# Mantiene cálculos, categorías y lógica de priorización sin cambios.\n# Basado en V2. Ajustes acotados: lectura direccional de VV y orden natural estable.\n\nMIXED_GREEN = "#6F927D"
 
 from io import BytesIO
 from pathlib import Path
@@ -576,13 +576,30 @@ def _sar_pattern_label(row):
 
 def _interpretation_sections(row, radar_only=False):
     """
-    Organiza en una lectura comprensible los campos ya calculados por AGIS.
+    Organiza la evidencia en una lectura operativa para el asesor.
     No genera diagnósticos, no recalcula indicadores ni modifica prioridades.
     """
     def value(field, fallback=""):
         if field not in row.index or pd.isna(row[field]):
             return fallback
         return str(row[field]).strip()
+
+    def number(field):
+        if field not in row.index:
+            return None
+        return _num(row[field])
+
+    def direction(delta):
+        if delta is None:
+            return "sin comparación temporal disponible"
+        if delta > 0:
+            return "aumentó"
+        if delta < 0:
+            return "disminuyó"
+        return "no presentó variación"
+
+    def clean_text(text):
+        return re.sub(r"\s+", " ", str(text or "")).strip(" .;")
 
     if radar_only:
         radar = _sar_metrics(row)
@@ -605,7 +622,11 @@ def _interpretation_sections(row, radar_only=False):
     conv = value("convergencia", "").lower()
     ndmi_label = _state_signal(row, "senal_relativa_NDMI", "ndmi")
     ndre_label = _state_signal(row, "senal_relativa_NDRE", "ndre")
+    delta_ndmi = number("delta_ndmi")
+    delta_ndre = number("delta_ndre")
 
+    ndmi_low = "BAJA_RELATIVA" in ndmi
+    ndre_low = "BAJA_RELATIVA" in ndre
     has_inconclusive = (
         "NO CONCLUYENTE" in ndmi_label.upper()
         or "NO CONCLUYENTE" in ndre_label.upper()
@@ -615,21 +636,24 @@ def _interpretation_sections(row, radar_only=False):
 
     if conv in ("true", "1", "sí", "si", "yes"):
         relation = (
-            f"Hay convergencia: NDMI ({ndmi_label.lower()}) y NDRE "
-            f"({ndre_label.lower()}) presentan una respuesta relativa coincidente. "
-            "Es una coincidencia entre indicadores relacionados; no constituye una evidencia independiente ni identifica por sí sola una causa."
+            f"NDMI y NDRE muestran señales relativas bajas frente al conjunto comparable. "
+            f"En la comparación temporal, NDMI {direction(delta_ndmi)} y NDRE {direction(delta_ndre)}. "
+            "La coincidencia entre ambos índices refuerza la señal relativa, pero son indicadores relacionados "
+            "y no identifican por sí solos una causa."
         )
     elif conv in ("false", "0", "no") and has_inconclusive:
+        low_name = "NDMI" if ndmi_low else ("NDRE" if ndre_low else "ninguno de los dos índices")
         relation = (
-            f"La convergencia no está confirmada: la evidencia disponible para NDMI "
-            f"({ndmi_label.lower()}) y NDRE ({ndre_label.lower()}) no permite establecer "
-            "una respuesta coincidente entre ambos indicadores."
+            f"La señal relativa baja aparece en {low_name}; el otro indicador no aporta una señal equivalente "
+            f"(NDMI: {ndmi_label.lower()}; NDRE: {ndre_label.lower()}). "
+            f"En el intervalo temporal, NDMI {direction(delta_ndmi)} y NDRE {direction(delta_ndre)}. "
+            "La coincidencia de señales relativas no está confirmada."
         )
     elif conv in ("false", "0", "no"):
         relation = (
-            f"Las señales presentan respuestas relativas diferentes: NDMI ({ndmi_label.lower()}) "
-            f"y NDRE ({ndre_label.lower()}). La divergencia debe interpretarse en su contexto, "
-            "sin asumir por sí sola una causa agronómica."
+            f"NDMI ({ndmi_label.lower()}) y NDRE ({ndre_label.lower()}) no muestran una señal relativa coincidente. "
+            f"En la comparación temporal, NDMI {direction(delta_ndmi)} y NDRE {direction(delta_ndre)}. "
+            "La diferencia entre índices no permite atribuir una causa agronómica."
         )
     else:
         relation = (
@@ -637,62 +661,136 @@ def _interpretation_sections(row, radar_only=False):
             f"(NDMI: {ndmi_label.lower()}; NDRE: {ndre_label.lower()})."
         )
 
+    # Integrar la lectura SAR en el mismo bloque, sin presentarla como confirmación óptica.
     sar = _sar_metrics(row)
     sar_available = _is_true(value("SAR_disponible", "false"))
     if not sar_available:
-        radar_text = "No hay evidencia SAR disponible para complementar esta lectura."
+        radar_clause = "No hay observación SAR disponible para complementar esta lectura."
     elif sar["delta"] != "—":
-        radar_text = (
-            f"VV actual: {sar['vv_actual']} dB; anterior: {sar['vv_anterior']} dB; "
-            f"variación informada: {sar['delta']} dB."
+        radar_clause = (
+            f"Sentinel-1 VV pasó de {sar['vv_anterior']} a {sar['vv_actual']} dB "
+            f"(variación {sar['delta']} dB)."
         )
         if sar["comparison"] not in ("—", ""):
-            radar_text += f" {sar['comparison']}."
-        radar_text += " El radar se presenta como evidencia complementaria; no se fuerza una equivalencia con NDMI o NDRE."
+            comparison_detail = sar["comparison"].replace("Comparación realizada con ", "")
+            radar_clause += f" Las escenas se compararon con {comparison_detail}."
+        if sar["s1_date"] not in ("—", ""):
+            radar_clause += f" Última observación SAR: {sar['s1_date']}."
+        radar_clause += " Es información complementaria; no confirma ni equivale directamente a la señal óptica."
     else:
-        radar_text = "Hay disponibilidad SAR, pero el CSV no aporta una variación VV interpretable para esta ficha."
+        radar_clause = "Hay datos SAR disponibles, pero no una variación VV interpretable para esta comparación."
+    integrated = relation + " " + radar_clause
 
     fenologia = value("fenologia_etapa", "")
-    dias = value("dias_desde_siembra", "")
-    phenology_text = f"Etapa fenológica: {fenologia}." if fenologia else ""
-    if dias:
-        phenology_text += f" Días desde siembra: {dias}."
-    observation = value("hallazgo_agis", "AGIS no informó un hallazgo textual.")
-    # El CSV puede incluir dentro del hallazgo una oración sobre SAR.
-    # Se separa para que esa evidencia aparezca una sola vez en su bloque propio.
+    observation = clean_text(value("hallazgo_agis", "AGIS no informó un hallazgo textual."))
     observation = re.sub(
         r"\s*La señal radar .*?(?=\s*Última observación S1 válida:|$)",
         "",
         observation,
         flags=re.IGNORECASE,
-    ).strip()
+    )
+    observation = re.sub(
+        r"\s*Última observación S1 válida:.*$",
+        "",
+        observation,
+        flags=re.IGNORECASE,
+    )
+    observation = re.sub(
+        r"\s*Contexto fenológico: no determinable en esta corrida\.?\s*",
+        " ",
+        observation,
+        flags=re.IGNORECASE,
+    ).strip(" .;")
+    if fenologia and fenologia.upper() not in ("NO_DETERMINABLE", "NO INFORMADA"):
+        observation += f". Contexto fenológico informado: {fenologia}."
+    else:
+        observation += ". Fenología no determinable en esta corrida."
 
-    alternatives = value("hipotesis_alternativas", "")
-    limits = value("limitaciones", "")
-    scope = " ".join(part for part in (alternatives, limits) if part)
-    if not scope:
-        scope = "La señal satelital no determina por sí sola una causa agronómica."
+    # Interpretación temporal prudente: describe el intervalo, no persistencia ni deterioro.
+    both_low = ndmi_low and ndre_low
+    both_down = delta_ndmi is not None and delta_ndre is not None and delta_ndmi < 0 and delta_ndre < 0
+    both_up = delta_ndmi is not None and delta_ndre is not None and delta_ndmi > 0 and delta_ndre > 0
+    mixed = delta_ndmi is not None and delta_ndre is not None and (
+        (delta_ndmi < 0 < delta_ndre) or (delta_ndre < 0 < delta_ndmi)
+    )
+
+    if both_low and both_up:
+        meaning = (
+            "Aunque ambos índices ocupan una posición relativa baja frente a otros lotes, "
+            "los dos aumentaron respecto de su referencia temporal. En este intervalo, la señal describe "
+            "una diferencia entre lotes, no una caída reciente de los indicadores."
+        )
+    elif both_low and both_down:
+        meaning = (
+            "La posición relativa baja coincide con una disminución de ambos índices frente a sus referencias "
+            "temporales. Es una señal que merece contraste en campo, pero un único intervalo no demuestra "
+            "deterioro ni permite establecer su persistencia."
+        )
+    elif both_low and mixed:
+        meaning = (
+            "Los dos índices presentan una posición relativa baja, pero su evolución temporal tiene direcciones "
+            "distintas. La señal transversal merece contraste, aunque la evolución no muestra una respuesta "
+            "temporal coincidente."
+        )
+    elif both_low:
+        meaning = (
+            "La coincidencia corresponde a una posición relativa baja frente a otros lotes. "
+            "La comparación temporal disponible no permite caracterizar una evolución común."
+        )
+    elif ndmi_low or ndre_low:
+        low_index = "NDMI" if ndmi_low else "NDRE"
+        low_delta = delta_ndmi if ndmi_low else delta_ndre
+        meaning = (
+            f"La señal relativa se concentra en {low_index}; el otro índice no presenta una señal equivalente. "
+            f"{low_index} {direction(low_delta)} frente a su referencia temporal. "
+            "Conviene comprobar si la diferencia también se observa en el lote antes de darle una interpretación agronómica."
+        )
+    else:
+        meaning = (
+            "En esta corrida no se identificó una señal relativa baja suficiente en NDMI o NDRE. "
+            "Las variaciones temporales se conservan como contexto de seguimiento y no justifican por sí solas "
+            "elevar la atención sobre el lote."
+        )
+
+    # Orientación de campo: parte de la KB existente y la concreta sin convertirla en diagnóstico.
+    crop = value("cultivo", "").strip().lower()
+    field_focus = clean_text(value("que_revisar", ""))
+    field_focus = re.sub(r"\s*Observación radar:.*$", "", field_focus, flags=re.IGNORECASE).strip(" .;")
+    if crop in ("manzano", "peral"):
+        field_check = (
+            "Comparar continuidad y densidad de copa, cobertura y coloración del follaje y uniformidad entre "
+            "sectores. Comprobar si las diferencias coinciden con sectores de riego, cambios de suelo, bordes "
+            "o interfilares. Contrastar con el manejo reciente y la etapa observada directamente; si hay frutos "
+            "visibles, comparar su distribución y desarrollo entre sectores."
+        )
+    else:
+        field_check = (
+            "Comparar cobertura, vigor y uniformidad entre el sector señalado y sectores representativos del lote. "
+            "Comprobar si el patrón coincide con diferencias de suelo, relieve, disponibilidad de agua o manejo "
+            "reciente, y contrastarlo con la etapa fenológica observada."
+        )
+        if field_focus:
+            field_check = f"Priorizar la revisión de {field_focus}. " + field_check
+
+    alternatives = clean_text(value("hipotesis_alternativas", ""))
+    limits = clean_text(value("limitaciones", ""))
+    scope_parts = []
+    if alternatives:
+        scope_parts.append(f"Factores alternativos a considerar: {alternatives}.")
+    if limits:
+        scope_parts.append(limits)
+    scope = " ".join(scope_parts) or (
+        "Los índices y el radar describen respuestas de superficie; no identifican por sí solos "
+        "una causa ni sustituyen la observación agronómica."
+    )
 
     return [
         ("Qué observamos", observation),
-        ("Cómo se relacionan las evidencias", relation),
-        ("Qué aporta el radar", radar_text),
-        ("Qué significa para el seguimiento", (
-            "NDMI y NDRE presentan señales relativas bajas en el conjunto comparable. "
-            "Esta coincidencia orienta la observación, pero no demuestra una alteración hídrica, "
-            "fisiológica ni una causa específica."
-            if conv in ("true", "1", "sí", "si", "yes") else
-            "La clasificación relativa observada no alcanza para confirmar una condición agronómica. "
-            "Conviene mantener el seguimiento y contrastar nuevas observaciones."
-        )),
-        ("Qué conviene verificar", (
-            "Contrastar los indicadores con observación directa del lote, estado y uniformidad "
-            "de la vegetación, manejo reciente y contexto fenológico. Un cambio entre dos "
-            "fechas no confirma por sí solo deterioro ni identifica su causa."
-        )),
-        ("Alcance de la interpretación", scope),
+        ("Lectura integrada de evidencias", integrated),
+        ("Qué significa para el seguimiento", meaning),
+        ("Qué conviene verificar en campo", field_check),
+        ("Límites de la interpretación", scope),
     ]
-
 
 def _interpretation_table(row, body, small, radar_only=False):
     """Construye la ficha interpretativa a partir de campos existentes del CSV."""
@@ -1046,7 +1144,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
         bottomMargin=15 * mm
     )
     # Identificador verificable del generador realmente ejecutado.
-    doc.title = "AGIS Informe de Monitoreo — Generador Adaptativo SAR Trivariado V5"
+    doc.title = "AGIS Informe de Monitoreo — Generador PDF V3 · SAR Trivariado V5"
     doc.author = "AGIS"
     doc.subject = "PDF generado con interpretación SAR trivariada VV, VH y VH−VV — V5"
 
