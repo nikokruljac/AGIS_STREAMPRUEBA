@@ -646,7 +646,11 @@ def _interpretation_sections(row, radar_only=False):
         )
         if sar["comparison"] not in ("—", ""):
             radar_text += f" {sar['comparison']}."
-        radar_text += " El radar se presenta como evidencia complementaria; no se fuerza una equivalencia con NDMI o NDRE."
+        radar_text += (
+            " El radar se presenta como evidencia complementaria; no se fuerza una equivalencia con NDMI o NDRE. "
+            "Nota metodológica: VH−VV se calcula primero como diferencia píxel a píxel y luego se resume "
+            "mediante la mediana espacial; por eso no equivale necesariamente a mediana(VH)−mediana(VV)."
+        )
     else:
         radar_text = "Hay disponibilidad SAR, pero el CSV no aporta una variación VV interpretable para esta ficha."
 
