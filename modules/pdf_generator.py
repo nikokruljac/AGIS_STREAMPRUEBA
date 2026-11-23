@@ -1820,13 +1820,6 @@ def build_pdf(df, gdf, raster, logo_bytes):
                 h2
             )
         )
-        story.append(
-            Paragraph(
-                "Lotes que requieren atención priorizada según la evidencia analizada por AGIS.",
-                body
-            )
-        )
-        story.append(Spacer(1, 5 * mm))
 
     def _priority_config(priority):
         """
