@@ -1,5 +1,5 @@
-# AGIS PDF GENERATOR — ADAPTATIVO SAR TRIVARIADO V5
-# V4 — FICHAS DIFERENCIADAS: lectura óptico-SAR, fechas y verificación de campo por patrón.
+# AGIS PDF GENERATOR — FICHAS ÓPTICO-SAR V5.1
+# Corrección de orientación de campo y aclaración del contraste VH−VV.
 # Mantiene cálculos, categorías y lógica de priorización sin cambios.
 
 MIXED_GREEN = "#6F927D"
@@ -482,11 +482,15 @@ def _sar_change_interpretation(radar):
 
     if ratio is not None:
         if ratio > 0:
-            base += " La diferencia entre VH y VV también aumentó, por lo que cambió la relación entre ambas respuestas."
+            base += " La diferencia calculada VH−VV aumentó."
         elif ratio < 0:
-            base += " La diferencia entre VH y VV disminuyó, por lo que cambió la relación entre ambas respuestas."
+            base += " La diferencia calculada VH−VV disminuyó."
         else:
-            base += " La diferencia entre VH y VV se mantuvo estable."
+            base += " La diferencia calculada VH−VV se mantuvo estable."
+        base += (
+            " Este valor resume el contraste entre las dos polarizaciones; se calcula a partir de VV y VH "
+            "y no constituye una tercera medición independiente."
+        )
 
     base += (
         " Estas variaciones pueden responder a humedad, rugosidad del suelo y "
@@ -685,9 +689,9 @@ def _interpretation_sections(row, radar_only=False):
         if radar["delta_vh_num"] is not None:
             radar_bits.append(f"VH {radar['delta_vh']} dB")
         if radar["delta_ratio_num"] is not None:
-            radar_bits.append(f"VH−VV {radar['delta_ratio']} dB")
+            radar_bits.append(f"la diferencia calculada VH−VV cambió {radar['delta_ratio']} dB")
         radar_clause = (
-            f"Radar Sentinel-1 ({s1_date}): variación " + ", ".join(radar_bits) + ". "
+            f"Radar Sentinel-1 ({s1_date}): entre adquisiciones, " + ", ".join(radar_bits) + ". "
             f"La última observación óptica fue {s2_date}; las fechas no son simultáneas. "
         )
         vv_delta = radar["delta_vv_num"]
@@ -702,8 +706,10 @@ def _interpretation_sections(row, radar_only=False):
         if radar["comparison"] not in ("—", ""):
             radar_clause += "La comparación SAR mantiene la misma órbita relativa, sentido y plataforma. "
         radar_clause += (
-            "El radar aporta una respuesta complementaria de la superficie y la estructura de la cobertura; "
-            "no confirma ni contradice por sí solo los índices ópticos."
+            "VH−VV resume el contraste entre las dos polarizaciones y se calcula a partir de VV y VH; "
+            "no es una tercera medición independiente. El radar aporta información complementaria sobre "
+            "la interacción de la señal con la superficie y la cobertura; no confirma ni contradice por sí "
+            "solo los índices ópticos."
         )
     integrated = optical_reading + " " + radar_clause
 
@@ -839,17 +845,9 @@ def _interpretation_sections(row, radar_only=False):
                 "No se desprende de esta corrida una verificación agronómica específica."
             )
 
-    # Conservar observaciones de la KB cuando aportan un foco concreto, sin duplicar frases genéricas.
-    kb_focus = clean_text(value("que_revisar", ""))
-    kb_focus = re.sub(r"\s*Observación radar:.*$", "", kb_focus, flags=re.IGNORECASE).strip(" .;")
-    generic_phrases = (
-        "mantener seguimiento",
-        "contrastar la evolución temporal",
-        "contexto fenológico",
-    )
-    if kb_focus and not any(p in kb_focus.lower() for p in generic_phrases):
-        if len(kb_focus) <= 220 and kb_focus.lower() not in field_check.lower():
-            field_check = f"Además, {kb_focus[0].lower() + kb_focus[1:]}"
+    # La orientación de campo se construye con frases completas según el patrón.
+    # No se concatena que_revisar automáticamente: algunos CSV contienen allí
+    # etiquetas o fragmentos nominales que producen recomendaciones gramaticalmente incompletas.
 
     alternatives = clean_text(value("hipotesis_alternativas", ""))
     limits = clean_text(value("limitaciones", ""))
@@ -1226,7 +1224,7 @@ def build_pdf(df, gdf, raster, logo_bytes):
     # Identificador verificable del generador realmente ejecutado.
     doc.title = "AGIS Informe de Monitoreo — Generador PDF V4 · SAR Trivariado V5"
     doc.author = "AGIS"
-    doc.subject = "PDF generado con interpretación SAR trivariada VV, VH y VH−VV — V5"
+    doc.subject = "PDF generado con lectura integrada óptica-SAR y orientación de campo — V5.1"
 
     styles = getSampleStyleSheet()
 
